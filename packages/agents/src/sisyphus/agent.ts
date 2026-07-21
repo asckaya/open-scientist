@@ -1,8 +1,7 @@
-import { WorkflowAgent } from '@ai-sdk/workflow'
 import { createModelFromConfig, type ModelArg } from '@open-scientist/config'
 import { getMcpTools } from '@open-scientist/mcp'
 import { type McpServerConfig, TournamentResultSchema } from '@open-scientist/schema'
-import { isStepCount, Output, type ToolSet, tool } from 'ai'
+import { isStepCount, Output, ToolLoopAgent, type ToolSet, tool } from 'ai'
 import { z } from 'zod'
 
 export interface SisyphusAgentDeps {
@@ -29,6 +28,12 @@ export interface SisyphusAgentDeps {
    * `tools` is not provided (caller-provided toolsets take full precedence).
    */
   mcpServers?: McpServerConfig[]
+  /**
+   * Optional runtime context passed to the ToolLoopAgent constructor. Carries
+   * serializable identifiers (projectId / runId) for telemetry and lineage.
+   * Must be plain data (no functions / class instances).
+   */
+  runtimeContext?: Record<string, unknown>
 }
 
 /**
@@ -37,18 +42,18 @@ export interface SisyphusAgentDeps {
  * (continue), reject (force another round), or inject steering feedback.
  *
  * `needsApproval: true` is a first-class tool property in the AI SDK — the
- * workflow runtime suspends execution until the user responds via the approval
- * API. The execute body below is the default fallback; the actual approval
- * response is injected by the runtime on resume.
+ * stream suspends execution until the user responds via the approval API. The
+ * execute body below is the default fallback; the actual approval response is
+ * injected by the runtime on resume.
  *
  * NOTE: In AI SDK 7, tool-level `needsApproval` is marked deprecated in favor
- * of streamText-level `toolApproval`. WorkflowAgent does not currently expose
- * `toolApproval` on its stream options, so the tool-level flag is still the
- * available mechanism. Sisyphus does NOT drive its own agent.stream() loop in
- * the current tournament implementation (the workflow is deterministic control
- * flow that direct-awaits the 5 sub-agent workflows), so this tool is wired
- * here for the Phase 4 API layer to invoke when human review is wired into the
- * tournament loop. See `tournamentWorkflow` for the current simplified path.
+ * of streamText-level `toolApproval`. ToolLoopAgent.stream forwards streamText
+ * options, so `toolApproval` is available via `prepareCall` / stream options
+ * when the Phase 4 API layer wires human review into the tournament loop.
+ * Sisyphus does NOT drive its own agent.stream() loop in the current
+ * tournament implementation (the orchestrator is deterministic control flow
+ * that direct-awaits the 5 sub-agent runs), so this tool is wired here for the
+ * Phase 4 API layer to invoke. See `tournamentWorkflow` for the current path.
  */
 const reviewLeadingHypothesisTool = tool({
   description:
@@ -109,10 +114,10 @@ export async function getDefaultSisyphusTools(mcpServers?: McpServerConfig[]): P
  *
  * Sisyphus is the Tournament Evolution conductor. In the current Phase 4
  * implementation, `tournamentWorkflow` (workflow.ts) drives the tournament via
- * deterministic Workflow Composition — it direct-awaits the 5 sub-agent
- * workflows (librarian → looker → explore ×N parallel → oracle → prometheus)
- * and does NOT spin up a Sisyphus LLM loop itself. The agent is still
- * constructed and exported so the Phase 4 API layer can use it for:
+ * deterministic control flow — it direct-awaits the 5 sub-agent runs
+ * (librarian → looker → explore ×N parallel → oracle → prometheus) and does
+ * NOT spin up a Sisyphus LLM loop itself. The agent is still constructed and
+ * exported so the Phase 4 API layer can use it for:
  *   - interpreting free-form user steering messages mid-tournament,
  *   - driving the `review_leading_hypothesis` approval tool when the
  *     human-in-the-loop node is wired in.
@@ -125,11 +130,12 @@ export async function createSisyphusAgent({
   tools,
   instructions,
   mcpServers,
+  runtimeContext,
 }: SisyphusAgentDeps) {
   const model = createModelFromConfig(modelConfig)
   const resolvedTools = tools ?? (await getDefaultSisyphusTools(mcpServers))
 
-  return new WorkflowAgent({
+  return new ToolLoopAgent({
     id: 'sisyphus',
     model,
     instructions:
@@ -157,6 +163,7 @@ You are a conductor, not a specialist — do NOT run physics code, query HelixDB
     tools: resolvedTools,
     output: Output.object({ schema: TournamentResultSchema }),
     stopWhen: isStepCount(50),
+    ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }
 

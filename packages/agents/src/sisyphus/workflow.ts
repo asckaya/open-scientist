@@ -1,11 +1,11 @@
-'use workflow'
-
 import type { AgentRuntimeConfig } from '@open-scientist/config'
 import type { EvalResult, Hypothesis, TournamentResult } from '@open-scientist/schema'
+import { exploreWorkflow } from '../explore/workflow.ts'
 import { librarianWorkflow } from '../librarian/workflow.ts'
 import { oracleWorkflow } from '../oracle/workflow.ts'
-import type { ConvergenceEntry } from '../prometheus/workflow.ts'
 import { prometheusWorkflow } from '../prometheus/workflow.ts'
+import type { ConvergenceEntry } from '../shared/convergence.ts'
+import type { EmitChunk } from '../shared/stream.ts'
 import {
   applyOraclePruning,
   buildConvergenceEntry,
@@ -15,9 +15,10 @@ import {
   shouldStopByTarget,
   updateHypothesesWithEval,
 } from './logic.ts'
-import { snapshotStep, spawnExploreEvalStep, waitForRunStep } from './steps/index.ts'
+import { snapshotStep } from './snapshot.ts'
 
 export type { TournamentInput, TournamentResult } from '@open-scientist/schema'
+export type { RoundSnapshot } from './snapshot.ts'
 
 /** Input to the Sisyphus tournament workflow. */
 export interface TournamentWorkflowInput {
@@ -43,29 +44,28 @@ export interface TournamentWorkflowInput {
    *
    * When `agentConfigs[role]` is present the sub-workflow receives it as
    * `agentConfig` and the factory applies the overrides; when absent the
-   * sub-workflow falls back to `modelConfig` + factory defaults. The whole
-   * map crosses the structured-clone boundary at every spawn — no functions
-   * or SDK clients allowed.
+   * sub-workflow falls back to `modelConfig` + factory defaults.
    */
   agentConfigs?: Record<string, AgentRuntimeConfig>
+  /**
+   * Optional SSE chunk sink. When provided, each `UIMessageChunk` produced by
+   * any sub-agent's `fullStream` is forwarded to this callback. The
+   * orchestrator (RunRegistry) buffers these for SSE replay / reconnect.
+   */
+  emitChunk?: EmitChunk
 }
 
 /**
  * Sisyphus tournament workflow: the Tournament Evolution orchestrator.
  *
- * This is a PARENT workflow that composes the 5 specialist sub-agent workflows
- * via Workflow Composition (Workflow DevKit §4.2):
+ * Plain async function that composes the 5 specialist sub-agent workflows:
  *
- *   - Direct await (flattening) for SEQUENTIAL composition — the parent needs
- *     the child's result before continuing. Used for librarian / looker /
- *     oracle / prometheus. The child's steps flatten into the parent's event
- *     log and share the parent's runId.
- *
- *   - Background spawn via `start()` for PARALLEL fan-out — each parallel
- *     Explore evaluation gets its own runId + event log + retry boundary.
- *     `start()` MUST be called inside a 'use step' function (see
- *     `spawnExploreEvalStep`); the parent then awaits each Run's
- *     `returnValue` (via `waitForRunStep`) to collect the EvalResults.
+ *   - Sequential `await` for librarian / oracle / prometheus (the parent needs
+ *     the child's result before continuing).
+ *   - Parallel `Promise.all` fan-out for Explore — each hypothesis evaluation
+ *     runs concurrently. All sub-agent stream chunks are forwarded to
+ *     `emitChunk` (if provided); chunks from parallel Explore runs may
+ *     interleave, which is fine for SSE (each chunk is self-contained).
  *
  * Round structure (per SPEC §6):
  *   Round 1: librarian → (hypotheses pool)
@@ -77,57 +77,33 @@ export interface TournamentWorkflowInput {
  * HUMAN-IN-THE-LOOP (TODO — Phase 4): the SPEC calls for a
  * `review_leading_hypothesis` needsApproval node after Oracle on high-stakes
  * rounds. AI SDK 7 deprecated tool-level `needsApproval` in favor of
- * streamText-level `toolApproval`, which WorkflowAgent.stream does not expose
- * on its options. Wiring this requires Phase 4 API-layer work (suspend the
- * parent workflow via a Hook and resume on user approval). For now the
- * tournament runs fully automatic — the review tool is defined on the
- * Sisyphus agent (see agent.ts) and will be invoked once the approval transport
- * is in place.
+ * streamText-level `toolApproval`; ToolLoopAgent.stream forwards streamText
+ * options so `toolApproval` is reachable via `prepareCall`. Wiring this
+ * requires Phase 4 API-layer work. For now the tournament runs fully automatic
+ * — the review tool is defined on the Sisyphus agent (see agent.ts) and will
+ * be invoked once the approval transport is in place.
  *
  * The Sisyphus agent itself is NOT driven via agent.stream() here — the
  * tournament is deterministic control flow. The agent exists for the Phase 4
  * API layer to use when interpreting free-form user steering messages or
  * driving the approval tool. See `createSisyphusAgent`.
- *
- * VM SAFETY: the workflow body runs inside a `@workflow/core` VM sandbox with
- * no `importModuleDynamically` callback — so no `await import()` is allowed
- * here. All sub-workflow + step modules are therefore imported STATICALLY at
- * module top-level. This is safe because:
- *   - `./logic.js` inlines MAX_ROUNDS / TARGET_F1 (no `@open-scientist/config`
- *     import) — pure JS, no Node deps.
- *   - `./steps/index.js` top-level imports only `workflow/api` (VM-safe, same
- *     source as `getWritable`) + `../../explore/workflow.js` (a thin VM-safe
- *     wrapper). All Node-touching work (`getRoundsDir` / `node:fs/promises`)
- *     is done via dynamic import INSIDE the `'use step'` function bodies.
- *   - `../librarian/workflow.js` / `../oracle/workflow.js` /
- *     `../prometheus/workflow.js` are each thin VM-safe wrappers that delegate
- *     to their own `runXxxStep` (`'use step'`) functions — the agent factories
- *     (`createXxxAgent`, which pull node:fs/node:path via tools/skills/config)
- *     are dynamically imported INSIDE those step bodies, never at module
- *     top-level.
- *
- * runtimeContext discipline: only serializable identifiers (projectId / runId /
- * round) cross the workflow + step boundaries. The model descriptor
- * (`ModelArg` — a plain object) is threaded through workflow args at every
- * spawn boundary and reconstructed into a `LanguageModel` inside each
- * `createXxxAgent` factory; no `LanguageModel` instance ever crosses a
- * structured-clone boundary.
  */
 export async function tournamentWorkflow(
   input: TournamentWorkflowInput,
 ): Promise<TournamentResult> {
-  const { seed, projectId, runId, modelConfig, agentConfigs } = input
+  const { seed, projectId, runId, modelConfig, agentConfigs, emitChunk } = input
 
   // Helper: pull this role's override (if any) from agentConfigs.
   const agentConfigFor = (role: string) => agentConfigs?.[role]
 
-  // ─── Round 1: Librarian generates the hypothesis pool (direct await) ───
+  // ─── Round 1: Librarian generates the hypothesis pool ───
   const hypoPool = await librarianWorkflow({
     seed,
     projectId,
     runId,
     modelConfig,
     ...(agentConfigFor('librarian') ? { agentConfig: agentConfigFor('librarian') } : {}),
+    ...(emitChunk ? { emitChunk } : {}),
   })
   let hypotheses: Hypothesis[] = [...hypoPool.hypotheses]
 
@@ -145,19 +121,15 @@ export async function tournamentWorkflow(
   for (let round = 2; round <= MAX_ROUNDS; round++) {
     totalRounds = round
 
-    // ── Explore: parallel evaluation of every hypothesis (background spawn) ──
+    // ── Explore: parallel evaluation of every hypothesis ──
     //
-    // Each hypothesis gets its own Explore workflow run with an independent
-    // runId + retry boundary. `spawnExploreEvalStep` wraps `start()` (which
-    // MUST live inside a 'use step'); `waitForRunStep` awaits each Run's
-    // `returnValue` (polls the run store until the child completes).
-    //
-    // Fan-out: spawn all N runs first (don't block on any single one), then
-    // await all returnValues in parallel — true parallelism, not sequential
-    // awaits.
-    const exploreRuns = await Promise.all(
+    // Each hypothesis gets its own Explore workflow run with an isolated
+    // per-hypothesis bash workspace. Fan-out via Promise.all gives true
+    // parallelism; all sub-agent chunks forward to emitChunk concurrently
+    // (JS is single-threaded, so the push is safe; chunks may interleave).
+    const evalResults: EvalResult[] = await Promise.all(
       hypotheses.map((h) =>
-        spawnExploreEvalStep({
+        exploreWorkflow({
           hypoId: h.id,
           projectId,
           runId,
@@ -165,11 +137,9 @@ export async function tournamentWorkflow(
           hypothesis: { statement: h.statement, pythonCode: h.pythonCode },
           modelConfig,
           ...(agentConfigFor('explore') ? { agentConfig: agentConfigFor('explore') } : {}),
+          ...(emitChunk ? { emitChunk } : {}),
         }),
       ),
-    )
-    const evalResults: EvalResult[] = await Promise.all(
-      exploreRuns.map((run) => waitForRunStep<EvalResult>(run)),
     )
 
     // ── Update hypotheses with F1 + status from this round's evaluations ──
@@ -181,7 +151,7 @@ export async function tournamentWorkflow(
 
     convergenceHistory.push(buildConvergenceEntry(round, bestF1, hypotheses.length))
 
-    // ── Persist round snapshot (durable, retriable) ──
+    // ── Persist round snapshot ──
     await snapshotStep({
       round,
       runId,
@@ -206,7 +176,7 @@ export async function tournamentWorkflow(
       break
     }
 
-    // ── Oracle: critique + mutate + eliminate (direct await) ──
+    // ── Oracle: critique + mutate + eliminate ──
     const oracleOutput = await oracleWorkflow({
       projectId,
       runId,
@@ -215,6 +185,7 @@ export async function tournamentWorkflow(
       evalResults,
       modelConfig,
       ...(agentConfigFor('oracle') ? { agentConfig: agentConfigFor('oracle') } : {}),
+      ...(emitChunk ? { emitChunk } : {}),
     })
 
     // Apply Oracle's pruning + mutations to the pool.
@@ -232,11 +203,11 @@ export async function tournamentWorkflow(
     }
 
     // TODO(Phase 4): insert the `review_leading_hypothesis` human-in-the-loop
-    // node here once the approval transport (workflow Hook + API resume) is
-    // wired in. Sisyphus agent already defines the tool (see agent.ts). For
-    // now the tournament runs fully automatic.
+    // node here once the approval transport is wired in. Sisyphus agent
+    // already defines the tool (see agent.ts). For now the tournament runs
+    // fully automatic.
 
-    // ── Prometheus: plan next round (direct await) ──
+    // ── Prometheus: plan next round ──
     const prometheusOutput = await prometheusWorkflow({
       projectId,
       runId,
@@ -246,6 +217,7 @@ export async function tournamentWorkflow(
       isFinalRound: false,
       modelConfig,
       ...(agentConfigFor('prometheus') ? { agentConfig: agentConfigFor('prometheus') } : {}),
+      ...(emitChunk ? { emitChunk } : {}),
     })
 
     // ── Convergence check #2: Prometheus says stop OR round cap hit ──
@@ -269,6 +241,7 @@ export async function tournamentWorkflow(
       leadingHypoId != null ? { hypoId: leadingHypoId, statement: winningStatement } : undefined,
     modelConfig,
     ...(agentConfigFor('prometheus') ? { agentConfig: agentConfigFor('prometheus') } : {}),
+    ...(emitChunk ? { emitChunk } : {}),
   })
 
   if (finalPrometheus.mhdConfig) {
