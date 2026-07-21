@@ -33,6 +33,10 @@ export interface LookerWorkflowInput {
    * the agent's `fullStream` is forwarded to this callback.
    */
   emitChunk?: EmitChunk
+  /**
+   * Optional abort signal threaded into `agent.stream({abortSignal})`.
+   */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -87,6 +91,7 @@ Steps:
 6. Return EvidenceAlignment with hypoId=${input.hypoId}, fitsPaths[], videoClipPath (nullable), metadata {activeRegion, timestamp, wavelength, spatialIndex}.`,
       },
     ],
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)

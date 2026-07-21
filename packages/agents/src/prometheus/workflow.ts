@@ -42,6 +42,19 @@ export interface PrometheusWorkflowInput {
    * the agent's `fullStream` is forwarded to this callback.
    */
   emitChunk?: EmitChunk
+  /**
+   * Optional human-in-the-loop feedback forwarded from the
+   * `onReviewLeadingHypothesis` callback in `tournamentWorkflow`. When
+   * non-null, Prometheus incorporates this steering input into its plan
+   * (e.g. "force another round", "consider alternative mechanism",
+   * "the user suspects nanoflares are over-represented"). Forwarded only
+   * on non-final rounds; ignored on the final round.
+   */
+  userFeedback?: string | null
+  /**
+   * Optional abort signal threaded into `agent.stream({abortSignal})`.
+   */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -113,13 +126,13 @@ Steps:
 Convergence history (best F1 per round + surviving hypothesis count):
 ${historyBlock}
 Current best F1: ${input.currentBestF1.toFixed(4)}
-
+${input.userFeedback ? `\nHuman reviewer feedback (from the review_leading_hypothesis node):\n  ${input.userFeedback}\n` : ''}
 Convergence rule: set shouldContinue = false when currentBestF1 >= 0.9 OR round >= 10. Otherwise shouldContinue = true.
 
 Steps:
-1. Review the score trajectory above. If F1 is plateauing, narrow paramRange and lower mutationRate (exploit). If F1 is still climbing or variance is high, widen paramRange and raise mutationRate (explore). If surviving count is collapsing, raise populationSize.
+1. Review the score trajectory above. If F1 is plateauing, narrow paramRange and lower mutationRate (exploit). If F1 is still climbing or variance is high, widen paramRange and raise mutationRate (explore). If surviving count is collapsing, raise populationSize.${input.userFeedback ? ' Incorporate the human reviewer feedback into your plan — it may override the default explore/exploit heuristic.' : ''}
 2. Allocate computeBudget: raise maxEvals / parallelWorkers when the round is high-value (near convergence); throttle when the search is clearly stuck.
-3. Output PrometheusOutput with: plan (round=${input.round}, adjusted searchParams.paramRange as a record of name -> [min, max], populationSize, mutationRate, computeBudget { maxEvals, parallelWorkers }, rationale explaining the explore/exploit tradeoff), mhdConfig = null, shouldContinue per the rule above.`
+3. Output PrometheusOutput with: plan (round=${input.round}, adjusted searchParams.paramRange as a record of name -> [min, max], populationSize, mutationRate, computeBudget { maxEvals, parallelWorkers }, rationale explaining the explore/exploit tradeoff${input.userFeedback ? ' + how the reviewer feedback was incorporated' : ''}), mhdConfig = null, shouldContinue per the rule above.`
 
   const result = await agent.stream({
     messages: [
@@ -128,6 +141,7 @@ Steps:
         content: messageContent,
       },
     ],
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)

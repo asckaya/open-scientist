@@ -199,7 +199,7 @@ describe('POST /api/projects/:name/runs', () => {
     }
     expect(input.seed).toBe('nanoflare reconnection heats the corona')
     expect(input.projectId).toBe('my-proj')
-    expect(input.runId).toMatch(/^run-\d+$/)
+    expect(input.runId).toMatch(/^run-\d+-[0-9a-f]{8}$/)
     expect(input.modelConfig.apiKey).toBe('sk-test-key')
     expect(input.modelConfig.provider).toBe('openai')
     expect(input.modelConfig.model).toBe('gpt-4o')

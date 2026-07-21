@@ -55,6 +55,15 @@ const registry = new Map<string, Run>()
  *
  * Returns the {@link Run} once registered (without awaiting completion). The
  * run's chunks populate asynchronously as sub-agents emit stream events.
+ *
+ * Live chunk delivery: `emitChunk` pushes new chunks into the buffer AND
+ * forwards them to every active stream controller (subscribers to the live
+ * SSE feed). When the run settles, all active controllers are closed.
+ *
+ * Cancellation: the `AbortController`'s signal is threaded through
+ * `TournamentWorkflowInput.abortSignal` → each sub-workflow →
+ * `agent.stream({abortSignal})`, so `POST /stop` actually halts LLM calls
+ * + tool execution rather than merely marking the SQLite row stopped.
  */
 export function start(input: TournamentWorkflowInput): Run {
   const runId = input.runId
@@ -64,23 +73,38 @@ export function start(input: TournamentWorkflowInput): Run {
 
   const abortController = new AbortController()
   const chunks: UIMessageChunk[] = []
+  // Active stream controllers for live SSE subscribers. Each `getReadable()`
+  // call registers its controller here so `emitChunk` can forward new chunks
+  // in real time (not just replay the buffer at connect time). When the run
+  // settles, every controller is closed and the set is cleared.
+  const activeControllers = new Set<ReadableStreamDefaultController<UIMessageChunk>>()
 
-  // Kick off the tournament in the background. Each emitted UIMessageChunk is
-  // pushed into the run's buffer. The promise rejects on tournament error or
-  // abort — callers (.result) can await it to observe completion.
+  const emit = (chunk: UIMessageChunk) => {
+    chunks.push(chunk)
+    for (const controller of activeControllers) {
+      try {
+        controller.enqueue(chunk)
+      } catch {
+        // Controller was closed by the consumer (e.g. client disconnected).
+        // Drop it from the live set so we stop forwarding to a dead stream.
+        activeControllers.delete(controller)
+      }
+    }
+  }
+
+  // Kick off the tournament in the background. The abort signal is threaded
+  // into tournamentWorkflow → sub-workflows → agent.stream so cancellation
+  // actually halts in-flight LLM + tool calls (not just marks SQLite).
   const result = tournamentWorkflow({
     ...input,
-    emitChunk: (chunk) => {
-      chunks.push(chunk)
-    },
+    emitChunk: emit,
+    ...(input.abortSignal ? {} : { abortSignal: abortController.signal }),
   }).then(
-    (output) => {
-      return output
-    },
+    (output) => output,
     (err) => {
-      // Re-throw so `.result` awaiters see the failure; chunks already
-      // buffered remain available for SSE replay / debugging.
-      if (abortController.signal.aborted) return undefined as unknown as TournamentResult
+      if (abortController.signal.aborted) {
+        return undefined as unknown as TournamentResult
+      }
       throw err
     },
   )
@@ -93,7 +117,7 @@ export function start(input: TournamentWorkflowInput): Run {
     cancel: async () => {
       abortController.abort()
     },
-    getReadable: (opts) => makeReadable(chunks, opts?.startIndex),
+    getReadable: (opts) => makeReadable(chunks, activeControllers, opts?.startIndex),
   }
 
   registry.set(runId, run)
@@ -102,6 +126,16 @@ export function start(input: TournamentWorkflowInput): Run {
   // while in-flight so /stream reconnects work; after completion clients
   // should read final status from SQLite via GET /runs/:id.
   void result.finally(() => {
+    // Close any remaining live subscribers so they see stream end rather
+    // than hanging on a buffer that will never grow again.
+    for (const controller of activeControllers) {
+      try {
+        controller.close()
+      } catch {
+        // Already closed — ignore.
+      }
+    }
+    activeControllers.clear()
     // Defer eviction slightly so a reconnect landing right at completion
     // still finds the run.
     setTimeout(() => {
@@ -121,10 +155,16 @@ export function getRun(runId: string): Run | undefined {
  * Build a `RunReadable` over the chunk buffer starting at `startIndex`.
  *
  * `startIndex < 0` is tail-relative (e.g. `-3` → last 3 chunks). Out-of-range
- * positive indexes clamp to the buffer end; the stream simply yields nothing
- * past the current tail and stays open for live chunks until the run settles.
+ * positive indexes clamp to the buffer end. After replaying existing chunks,
+ * the controller is registered with `activeControllers` so live chunks
+ * emitted after connect are forwarded to the subscriber. The controller is
+ * unregistered on consumer cancel / error.
  */
-function makeReadable(chunks: UIMessageChunk[], startIndex?: number): RunReadable {
+function makeReadable(
+  chunks: UIMessageChunk[],
+  activeControllers: Set<ReadableStreamDefaultController<UIMessageChunk>>,
+  startIndex?: number,
+): RunReadable {
   const resolveStart = () => {
     if (startIndex === undefined) return 0
     if (startIndex < 0) return Math.max(0, chunks.length + startIndex)
@@ -139,12 +179,26 @@ function makeReadable(chunks: UIMessageChunk[], startIndex?: number): RunReadabl
         controller.enqueue(chunks[cursor] as UIMessageChunk)
         cursor += 1
       }
+      // Register for live chunk delivery. `emit` (in start()) will forward
+      // each new chunk to this controller as it arrives.
+      activeControllers.add(controller)
+    },
+    cancel(reason) {
+      // Consumer disconnected (e.g. client closed the SSE connection). The
+      // controller is no longer usable; drop it from the live set so `emit`
+      // stops forwarding to it. We can't reference `controller` here (it's
+      // scoped to `start`), so we rely on the fact that a cancelled stream's
+      // controller is already detached — emit's try/catch will silently drop
+      // enqueues to it. To keep the set tidy, we filter out closed
+      // controllers on each emit pass (see `emit` in start()).
+      // NOTE: The actual removal happens lazily in `emit`'s catch block.
+      void reason
     },
   })
 
   return {
     pipeThrough: <T>(transform: TransformStream<UIMessageChunk, T>) =>
       stream.pipeThrough(transform),
-    getTailIndex: async () => Math.max(0, chunks.length - 1),
+    getTailIndex: async () => chunks.length - 1,
   }
 }

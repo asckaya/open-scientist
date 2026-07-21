@@ -35,6 +35,10 @@ export interface ExploreWorkflowInput {
    * uses it to buffer chunks for SSE replay / reconnect.
    */
   emitChunk?: EmitChunk
+  /**
+   * Optional abort signal threaded into `agent.stream({abortSignal})`.
+   */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -97,6 +101,7 @@ Steps:
 6. Return EvalResult with hypoId=${input.hypoId}, f1, truePositives, falsePositives, falseNegatives, counterexamples[] (physically specific), logs (commands + key stdout), executionMs.`,
       },
     ],
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)

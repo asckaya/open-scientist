@@ -1,4 +1,5 @@
-import { tournamentWorkflow } from '@open-scientist/agents'
+import { randomUUID } from 'node:crypto'
+import { readLatestSnapshot, tournamentWorkflow } from '@open-scientist/agents'
 import {
   type AgentRuntimeConfig,
   ModelAliasNotFoundError,
@@ -119,7 +120,9 @@ runs.post('/api/projects/:name/runs', async (c) => {
     // the same id used as the transport-level `x-workflow-run-id` (returned
     // below) since we no longer have an SDK run id distinct from the
     // business run id — the RunRegistry keys runs by this label directly.
-    runId: `run-${Date.now()}`,
+    // Suffix a short random UUID to avoid same-millisecond collisions when
+    // two POST /runs land in the same Date.now() tick.
+    runId: `run-${Date.now()}-${randomUUID().slice(0, 8)}`,
     // Default model — kept for backward compat (sub-agents without an
     // explicit agentConfigs entry fall back to this).
     modelConfig,
@@ -245,6 +248,90 @@ runs.post('/api/projects/:name/runs/:runId/stop', async (c) => {
   }
   await updateRunStatus(projectName, runId, 'stopped')
   return c.json({ ok: true, runId, status: 'stopped' })
+})
+
+/**
+ * POST /api/projects/:name/runs/:runId/resume — resume a crashed run from its
+ * latest snapshot.
+ *
+ * Dev-mode crash recovery: after a `tsx watch` restart or process crash, an
+ * in-flight tournament run is lost from the in-memory `RunRegistry`. This
+ * endpoint reads the latest `rounds/<n>/snapshot.json` for the run and
+ * restarts `tournamentWorkflow` from `snapshot.round + 1`, skipping Round 1
+ * (Librarian) and restoring the hypotheses + convergence history from the
+ * snapshot.
+ *
+ * Body: `{ seed?: string, modelAlias?: string }`. The `seed` is only needed
+ * for display purposes (the resumed run doesn't call Librarian); `modelAlias`
+ * resolves the model config the same way as POST `/runs`.
+ *
+ * Returns the same SSE stream shape as POST `/runs` — the client can treat
+ * the resumed run identically (same `x-workflow-run-id` header, same
+ * `/stream` reconnect endpoint).
+ *
+ * 404 if the run has no snapshots (e.g. it crashed before completing Round 1).
+ */
+runs.post('/api/projects/:name/runs/:runId/resume', async (c) => {
+  const projectName = c.req.param('name')
+  const runId = c.req.param('runId')
+  const body = await c.req.json().catch(() => ({}))
+  const modelAlias =
+    typeof body?.modelAlias === 'string' && body.modelAlias.length > 0 ? body.modelAlias : undefined
+  // seed is optional on resume — only used for display, not passed to Librarian.
+  const seed = typeof body?.seed === 'string' ? body.seed : '(resumed)'
+
+  const project = await getProject(projectName)
+  if (!project) {
+    return c.json({ error: 'not_found', message: `Project "${projectName}" not found` }, 404)
+  }
+
+  // Find the latest snapshot for this run.
+  const snapshot = await readLatestSnapshot(projectName, runId)
+  if (!snapshot) {
+    return c.json(
+      {
+        error: 'not_found',
+        message: `No snapshot found for run "${runId}" — cannot resume (the run may have crashed before completing Round 1)`,
+      },
+      404,
+    )
+  }
+
+  let modelConfig: ModelArg
+  let agentConfigs: Record<string, AgentRuntimeConfig>
+  try {
+    modelConfig = await resolveRunModelArg(projectName, modelAlias)
+    agentConfigs = await resolveRunAgentConfigs(projectName, modelAlias)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const status = err instanceof ModelAliasNotFoundError ? 400 : 500
+    const error = err instanceof ModelAliasNotFoundError ? 'bad_request' : 'model_config_error'
+    return c.json({ error, message }, status)
+  }
+
+  const run = startRun({
+    seed,
+    projectId: projectName,
+    runId,
+    modelConfig,
+    agentConfigs,
+    resumeFrom: snapshot,
+  })
+
+  // Update the SQLite row back to 'running' (it may have been 'stopped' or
+  // stuck in 'running' from the crash).
+  await updateRunStatus(projectName, runId, 'running')
+
+  return createUIMessageStreamResponse({
+    stream: run.getReadable({ startIndex: 0 }).pipeThrough(
+      new TransformStream<UIMessageChunk, UIMessageChunk>({
+        transform(chunk, controller) {
+          controller.enqueue(chunk)
+        },
+      }),
+    ),
+    headers: { 'x-workflow-run-id': run.runId },
+  })
 })
 
 // Re-export tournamentWorkflow for tests that assert on the workflow function

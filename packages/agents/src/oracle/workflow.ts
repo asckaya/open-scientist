@@ -32,6 +32,10 @@ export interface OracleWorkflowInput {
    * the agent's `fullStream` is forwarded to this callback.
    */
   emitChunk?: EmitChunk
+  /**
+   * Optional abort signal threaded into `agent.stream({abortSignal})`.
+   */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -90,6 +94,7 @@ Steps:
 Return OracleOutput (critiques[], mutations[], eliminatedIds[], winningHypoId). Each major/fatal critique must pair with either a mutation or an elimination.`,
       },
     ],
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)

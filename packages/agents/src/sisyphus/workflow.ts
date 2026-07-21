@@ -15,10 +15,62 @@ import {
   shouldStopByTarget,
   updateHypothesesWithEval,
 } from './logic.ts'
+import type { RoundSnapshot } from './snapshot.ts'
 import { snapshotStep } from './snapshot.ts'
 
 export type { TournamentInput, TournamentResult } from '@open-scientist/schema'
 export type { RoundSnapshot } from './snapshot.ts'
+
+/**
+ * Context passed to the `onReviewLeadingHypothesis` callback. Contains
+ * everything a human reviewer needs to decide whether to approve the leader.
+ */
+export interface ReviewLeadingHypothesisContext {
+  /** Current round number (the round that just finished Oracle). */
+  round: number
+  /** Project identifier — for looking up persistence / SSE context. */
+  projectId: string
+  /** Run identifier — for looking up persistence / SSE context. */
+  runId: string
+  /** The leading hypothesis ID (null if no hypotheses survived). */
+  leadingHypoId: string | null
+  /** The leading hypothesis statement (empty string if no leader). */
+  leadingStatement: string
+  /** Best F1 score so far. */
+  bestF1: number
+  /** Number of surviving hypotheses in the pool. */
+  survivingCount: number
+}
+
+/**
+ * Result returned by the `onReviewLeadingHypothesis` callback.
+ * - `approved: true` → tournament continues to Prometheus (next round / final).
+ * - `approved: false` → tournament still continues, but the feedback is
+ *   forwarded to Prometheus as steering input (e.g. "force another round",
+ *   "consider alternative mechanism"). The tournament does NOT abort on
+ *   rejection — it just incorporates the feedback. To fully abort a run,
+ *   use `POST /runs/:runId/stop`.
+ */
+export interface ReviewLeadingHypothesisResult {
+  approved: boolean
+  /** Optional steering feedback for Prometheus / next round. */
+  feedback: string | null
+}
+
+/**
+ * Optional human-in-the-loop callback invoked after Oracle and before
+ * Prometheus on each round. When provided, the tournament pauses and calls
+ * this function with the current leader context. The caller (typically the
+ * Phase 4 API layer) surfaces this to a human reviewer via SSE
+ * `tool-approval-request`-style chunk and resumes when the user responds.
+ *
+ * When omitted (default), the tournament runs fully automatic — no review
+ * node is inserted. This keeps the tournament testable without a human in
+ * the loop and matches the pre-Phase-4 behavior.
+ */
+export type OnReviewLeadingHypothesis = (
+  context: ReviewLeadingHypothesisContext,
+) => Promise<ReviewLeadingHypothesisResult>
 
 /** Input to the Sisyphus tournament workflow. */
 export interface TournamentWorkflowInput {
@@ -53,6 +105,30 @@ export interface TournamentWorkflowInput {
    * orchestrator (RunRegistry) buffers these for SSE replay / reconnect.
    */
   emitChunk?: EmitChunk
+  /**
+   * Optional human-in-the-loop review callback invoked after Oracle and before
+   * Prometheus on each round. When provided, the tournament pauses for human
+   * review of the leading hypothesis. When omitted (default), the tournament
+   * runs fully automatic. See {@link OnReviewLeadingHypothesis}.
+   */
+  onReviewLeadingHypothesis?: OnReviewLeadingHypothesis
+  /**
+   * Optional snapshot to resume from (dev-mode crash recovery). When provided,
+   * the tournament skips Round 1 (Librarian) and resumes from
+   * `resumeFrom.round + 1` using the snapshot's hypotheses + convergence
+   * history. Use {@link readLatestSnapshot} to find the latest snapshot for a
+   * given project + run. When omitted (default), the tournament starts fresh
+   * from Round 1.
+   */
+  resumeFrom?: RoundSnapshot
+  /**
+   * Optional abort signal. When provided, the tournament threads it into every
+   * sub-workflow's `agent.stream({abortSignal})` call so `POST /stop` actually
+   * halts in-flight LLM + tool execution rather than merely marking the
+   * SQLite row stopped. The RunRegistry (`apps/api/src/lib/run-stream.ts`)
+   * supplies the `AbortController`'s signal here on `start()`.
+   */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -70,18 +146,31 @@ export interface TournamentWorkflowInput {
  * Round structure (per SPEC §6):
  *   Round 1: librarian → (hypotheses pool)
  *   Round 2..MAX_ROUNDS:
- *     explore ×N (parallel) → oracle (critique + mutate) → prometheus (plan)
+ *     explore ×N (parallel) → oracle (critique + mutate) → [optional review] → prometheus (plan)
  *     → convergence check (F1 >= 0.9 OR round >= 10 OR !shouldContinue)
  *   Final round: prometheus with isFinalRound=true → MHD cfg + observation proposal
  *
- * HUMAN-IN-THE-LOOP (TODO — Phase 4): the SPEC calls for a
- * `review_leading_hypothesis` needsApproval node after Oracle on high-stakes
- * rounds. AI SDK 7 deprecated tool-level `needsApproval` in favor of
- * streamText-level `toolApproval`; ToolLoopAgent.stream forwards streamText
- * options so `toolApproval` is reachable via `prepareCall`. Wiring this
- * requires Phase 4 API-layer work. For now the tournament runs fully automatic
- * — the review tool is defined on the Sisyphus agent (see agent.ts) and will
- * be invoked once the approval transport is in place.
+ * RESUME FROM SNAPSHOT: when `resumeFrom` is provided (dev-mode crash
+ * recovery), Round 1 (Librarian) is skipped and the tournament resumes from
+ * `resumeFrom.round + 1` using the snapshot's hypotheses + convergence
+ * history. Use `readLatestSnapshot(projectId, runId)` to find the latest
+ * snapshot for a given run.
+ *
+ * HUMAN-IN-THE-LOOP: the SPEC calls for a `review_leading_hypothesis`
+ * approval node after Oracle on high-stakes rounds. This is wired via the
+ * optional `onReviewLeadingHypothesis` callback on `TournamentWorkflowInput`.
+ * When provided, the tournament pauses after Oracle and calls the callback
+ * with the current leader context. The caller (Phase 4 API layer) surfaces
+ * this to a human reviewer via SSE and resumes when the user responds. The
+ * feedback (if any) is forwarded to Prometheus as steering input. When the
+ * callback is omitted (default), the tournament runs fully automatic.
+ *
+ * Additionally, the Sisyphus agent (see agent.ts) has `toolApproval` configured
+ * for the `review_leading_hypothesis` tool, so when the Phase 4 API layer
+ * spins up a Sisyphus `agent.stream()` (for free-form steering or LLM-driven
+ * review), the stream suspends and emits a `tool-approval-request` chunk that
+ * the frontend can render. The `onReviewLeadingHypothesis` callback here is
+ * the deterministic-tournament equivalent — it does not require an LLM loop.
  *
  * The Sisyphus agent itself is NOT driven via agent.stream() here — the
  * tournament is deterministic control flow. The agent exists for the Phase 4
@@ -91,34 +180,76 @@ export interface TournamentWorkflowInput {
 export async function tournamentWorkflow(
   input: TournamentWorkflowInput,
 ): Promise<TournamentResult> {
-  const { seed, projectId, runId, modelConfig, agentConfigs, emitChunk } = input
-
-  // Helper: pull this role's override (if any) from agentConfigs.
-  const agentConfigFor = (role: string) => agentConfigs?.[role]
-
-  // ─── Round 1: Librarian generates the hypothesis pool ───
-  const hypoPool = await librarianWorkflow({
+  const {
     seed,
     projectId,
     runId,
     modelConfig,
-    ...(agentConfigFor('librarian') ? { agentConfig: agentConfigFor('librarian') } : {}),
-    ...(emitChunk ? { emitChunk } : {}),
-  })
-  let hypotheses: Hypothesis[] = [...hypoPool.hypotheses]
+    agentConfigs,
+    emitChunk,
+    onReviewLeadingHypothesis,
+    resumeFrom,
+    abortSignal,
+  } = input
 
-  // Best-F1 + convergence tracking across rounds.
-  let bestF1 = 0
-  let leadingHypoId: string | null = null
-  const convergenceHistory: ConvergenceEntry[] = []
+  // Helper: pull this role's override (if any) from agentConfigs.
+  const agentConfigFor = (role: string) => agentConfigs?.[role]
+
+  // ─── Round 1: Librarian generates the hypothesis pool (or resume from snapshot) ───
+  //
+  // When `resumeFrom` is provided (dev-mode crash recovery), skip Round 1 and
+  // restore the hypotheses + convergence history from the snapshot. The loop
+  // starts at `resumeFrom.round + 1`. When omitted, run Librarian fresh.
+  let hypotheses: Hypothesis[]
+  let bestF1: number
+  let leadingHypoId: string | null
+  let convergenceHistory: ConvergenceEntry[]
+
+  if (resumeFrom) {
+    // Restore hypotheses + convergence history from the snapshot. The snapshot
+    // doesn't persist `pythonCode` or `createdAt` (they're not needed for
+    // resume — Explore re-derives pythonCode from the statement if the
+    // hypothesis is re-evaluated). Provide sensible defaults.
+    hypotheses = resumeFrom.hypotheses.map((h) => ({
+      id: h.id,
+      statement: h.statement,
+      pythonCode: '', // not persisted in snapshot; Explore re-derives if needed
+      parentId: h.parentId,
+      round: h.round,
+      f1: h.f1,
+      status: h.status as Hypothesis['status'],
+      createdAt: resumeFrom.capturedAt,
+    }))
+    bestF1 = resumeFrom.bestF1
+    leadingHypoId = resumeFrom.leadingHypoId
+    convergenceHistory = [...resumeFrom.convergenceHistory]
+  } else {
+    const hypoPool = await librarianWorkflow({
+      seed,
+      projectId,
+      runId,
+      modelConfig,
+      ...(agentConfigFor('librarian') ? { agentConfig: agentConfigFor('librarian') } : {}),
+      ...(emitChunk ? { emitChunk } : {}),
+      ...(abortSignal ? { abortSignal } : {}),
+    })
+    hypotheses = [...hypoPool.hypotheses]
+    bestF1 = 0
+    leadingHypoId = null
+    convergenceHistory = []
+  }
 
   // Final-round outputs (filled by Prometheus when the tournament converges).
   let mhdConfigPath: string | null = null
   let observationProposal: string | null = null
-  let totalRounds = 1
+  let totalRounds = resumeFrom ? resumeFrom.round : 1
 
-  // ─── Rounds 2..MAX_ROUNDS: Explore → Oracle → Prometheus loop ───
-  for (let round = 2; round <= MAX_ROUNDS; round++) {
+  // ─── Rounds (resumeFrom.round + 1)..MAX_ROUNDS: Explore → Oracle → Prometheus loop ───
+  //
+  // When resuming, start at resumeFrom.round + 1 (the snapshot's round already
+  // completed). When fresh, start at 2 (Round 1 was Librarian).
+  const startRound = resumeFrom ? resumeFrom.round + 1 : 2
+  for (let round = startRound; round <= MAX_ROUNDS; round++) {
     totalRounds = round
 
     // ── Explore: parallel evaluation of every hypothesis ──
@@ -138,6 +269,7 @@ export async function tournamentWorkflow(
           modelConfig,
           ...(agentConfigFor('explore') ? { agentConfig: agentConfigFor('explore') } : {}),
           ...(emitChunk ? { emitChunk } : {}),
+          ...(abortSignal ? { abortSignal } : {}),
         }),
       ),
     )
@@ -186,6 +318,7 @@ export async function tournamentWorkflow(
       modelConfig,
       ...(agentConfigFor('oracle') ? { agentConfig: agentConfigFor('oracle') } : {}),
       ...(emitChunk ? { emitChunk } : {}),
+      ...(abortSignal ? { abortSignal } : {}),
     })
 
     // Apply Oracle's pruning + mutations to the pool.
@@ -202,10 +335,30 @@ export async function tournamentWorkflow(
       break
     }
 
-    // TODO(Phase 4): insert the `review_leading_hypothesis` human-in-the-loop
-    // node here once the approval transport is wired in. Sisyphus agent
-    // already defines the tool (see agent.ts). For now the tournament runs
-    // fully automatic.
+    // ── Human-in-the-loop review node (optional) ──
+    //
+    // When `onReviewLeadingHypothesis` is provided, pause the tournament and
+    // ask a human reviewer to approve the leader. The callback returns
+    // {approved, feedback}. On rejection the tournament does NOT abort — the
+    // feedback is forwarded to Prometheus as steering input (e.g. "force
+    // another round", "consider nanoflares"). To fully abort, use
+    // `POST /runs/:runId/stop`. When the callback is omitted (default), the
+    // tournament runs fully automatic.
+    let reviewFeedback: string | null = null
+    if (onReviewLeadingHypothesis) {
+      const leaderHypo =
+        leadingHypoId !== null ? hypotheses.find((h) => h.id === leadingHypoId) : undefined
+      const reviewResult = await onReviewLeadingHypothesis({
+        round,
+        projectId,
+        runId,
+        leadingHypoId,
+        leadingStatement: leaderHypo?.statement ?? '',
+        bestF1,
+        survivingCount: hypotheses.length,
+      })
+      reviewFeedback = reviewResult.feedback
+    }
 
     // ── Prometheus: plan next round ──
     const prometheusOutput = await prometheusWorkflow({
@@ -218,6 +371,8 @@ export async function tournamentWorkflow(
       modelConfig,
       ...(agentConfigFor('prometheus') ? { agentConfig: agentConfigFor('prometheus') } : {}),
       ...(emitChunk ? { emitChunk } : {}),
+      ...(reviewFeedback !== null ? { userFeedback: reviewFeedback } : {}),
+      ...(abortSignal ? { abortSignal } : {}),
     })
 
     // ── Convergence check #2: Prometheus says stop OR round cap hit ──
@@ -242,6 +397,7 @@ export async function tournamentWorkflow(
     modelConfig,
     ...(agentConfigFor('prometheus') ? { agentConfig: agentConfigFor('prometheus') } : {}),
     ...(emitChunk ? { emitChunk } : {}),
+    ...(abortSignal ? { abortSignal } : {}),
   })
 
   if (finalPrometheus.mhdConfig) {

@@ -34,6 +34,12 @@ export interface LibrarianWorkflowInput {
    * uses it to buffer chunks for SSE replay / reconnect.
    */
   emitChunk?: EmitChunk
+  /**
+   * Optional abort signal threaded into `agent.stream({abortSignal})`. When
+   * the RunRegistry cancels a run, the abort propagates here to halt
+   * in-flight LLM + tool calls.
+   */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -90,6 +96,7 @@ Load the 'solar-physics-rag' skill first for retrieval guidance and the Python f
 Return the HypothesisPool with rationale explaining your coverage strategy.`,
       },
     ],
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)
