@@ -30,8 +30,8 @@ export function getProjectDir(name: string): string {
   return resolve(getBaseDir(), 'projects', name)
 }
 
-export function getWorkspaceDir(project: string, hypoId: string): string {
-  return resolve(getProjectDir(project), 'workspace', hypoId)
+export function getWorkspaceDir(project: string, runId: string, hypoId: string): string {
+  return resolve(getProjectDir(project), 'runs', runId, 'workspace', hypoId)
 }
 
 export function getEvidenceDir(project: string, hypoId: string): string {
