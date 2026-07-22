@@ -115,6 +115,9 @@ async function main() {
 
   await mkdir(DATASET_DIR, { recursive: true })
 
+  // Truncate the output file up front so re-runs don't append to stale data.
+  await writeFile(SNAPSHOTS_PATH, '', { flag: 'w' })
+
   let lines = ''
   let positiveCount = 0
   for (let i = 0; i < NUM_SNAPSHOTS; i++) {
@@ -124,7 +127,7 @@ async function main() {
 
     // Write in batches to avoid huge string
     if (lines.length > 1_000_000) {
-      await writeFile(SNAPSHOTS_PATH, lines, { flag: i === 0 ? 'w' : 'a' })
+      await writeFile(SNAPSHOTS_PATH, lines, { flag: 'a' })
       lines = ''
     }
   }

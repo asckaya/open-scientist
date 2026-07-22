@@ -139,10 +139,18 @@ async function execCommand(command: string, opts: ExecOptions): Promise<BashTool
 
       if (timedOut) {
         stderr += `\n[timeout after ${timeoutMs / 1000}s]`
-        resolve({ stdout: truncateTail(stdout).content, stderr, exitCode: null })
+        resolve({
+          stdout: truncateTail(stdout).content,
+          stderr: truncateTail(stderr).content,
+          exitCode: null,
+        })
       } else if (aborted) {
         stderr += '\n[aborted]'
-        resolve({ stdout: truncateTail(stdout).content, stderr, exitCode: null })
+        resolve({
+          stdout: truncateTail(stdout).content,
+          stderr: truncateTail(stderr).content,
+          exitCode: null,
+        })
       } else {
         resolve({
           stdout: truncateTail(stdout).content,
@@ -165,6 +173,26 @@ async function execCommand(command: string, opts: ExecOptions): Promise<BashTool
   })
 }
 
+// ─── workspace boundary guard ────────────────────────────────────────────────
+
+/**
+ * Resolve a user-supplied path and verify it stays within `cwd`.
+ *
+ * Rejects absolute paths and `..` traversal that would escape the workspace
+ * directory, preventing arbitrary file read/write on the host.
+ */
+function resolveWithinWorkspace(cwd: string, userPath: string): string {
+  const resolved = nodePath.resolve(cwd, userPath)
+  const normalizedCwd = nodePath.resolve(cwd)
+  // Ensure the resolved path is the cwd itself or a descendant of it.
+  if (resolved !== normalizedCwd && !resolved.startsWith(`${normalizedCwd}${nodePath.sep}`)) {
+    throw new Error(
+      `Path "${userPath}" resolves outside the workspace directory. Only paths within the workspace are allowed.`,
+    )
+  }
+  return resolved
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -172,13 +200,14 @@ async function execCommand(command: string, opts: ExecOptions): Promise<BashTool
  *
  * Uses `node:child_process` spawn (real host shell) — supports Python,
  * Node.js, and any system binary. Files persist to disk under
- * `data/projects/<project>/workspace/<hypoId>/`.
+ * `data/projects/<project>/runs/<runId>/workspace/<hypoId>/`.
  *
  * Features borrowed from pi (github.com/earendil-works/pi):
  * - spawn-based streaming output (not exec buffering)
  * - Process tree kill via detached process groups (SIGKILL)
  * - AbortSignal + timeout support
  * - Tail-truncation (50KB / 2000 lines, keep newest output)
+ * - Workspace boundary enforcement for readFile/writeFile (no path traversal)
  */
 export async function createBashToolForHypothesis(
   project: string,
@@ -214,10 +243,10 @@ export async function createBashToolForHypothesis(
   const readFileTool = tool({
     description: 'Read a file from the workspace directory.',
     inputSchema: z.object({
-      path: z.string().describe('Relative or absolute path to the file'),
+      path: z.string().describe('Relative path to the file within the workspace'),
     }),
     execute: async ({ path }) => {
-      const resolved = nodePath.resolve(cwd, path)
+      const resolved = resolveWithinWorkspace(cwd, path)
       const content = await fsReadFile(resolved, 'utf-8')
       return { content }
     },
@@ -227,11 +256,11 @@ export async function createBashToolForHypothesis(
     description:
       'Write content to a file in the workspace directory. Creates parent directories if needed.',
     inputSchema: z.object({
-      path: z.string().describe('Relative or absolute path to the file'),
+      path: z.string().describe('Relative path to the file within the workspace'),
       content: z.string().describe('The content to write'),
     }),
     execute: async ({ path, content }) => {
-      const resolved = nodePath.resolve(cwd, path)
+      const resolved = resolveWithinWorkspace(cwd, path)
       await mkdir(nodePath.dirname(resolved), { recursive: true })
       await fsWriteFile(resolved, content, 'utf-8')
       return { success: true as const }
