@@ -40,18 +40,25 @@ export function makeSubmitResultTool<T extends ZodSchema>(schema: T) {
  * Extract the submitted result from `result.staticToolCalls`.
  *
  * Finds the first `submit_result` tool call in the array and returns its
- * `input`. Throws if no `submit_result` call was made (the agent hit the step
- * limit without submitting).
+ * `input`. When no `submit_result` call was made (the agent hit the step
+ * limit without submitting), returns `fallback` if provided, otherwise throws.
+ *
+ * Providing a `fallback` makes the tournament resilient to agents that
+ * exhaust their step budget during iterative exploration without ever
+ * submitting — the caller gets a zero-valued result and the tournament
+ * can continue to the next phase (e.g. Oracle critique) instead of crashing.
  */
 export function extractSubmitResult<TOOLS extends ToolSet, T>(
   staticToolCalls: Array<StaticToolCall<TOOLS>>,
   toolName: string = 'submit_result',
+  fallback?: T,
 ): T {
   for (const tc of staticToolCalls) {
     if (tc.toolName === toolName) {
       return tc.input as T
     }
   }
+  if (fallback !== undefined) return fallback
   throw new Error(
     `Agent did not call '${toolName}' — it hit the step limit without submitting a result. Check the agent's tool calls and instructions.`,
   )

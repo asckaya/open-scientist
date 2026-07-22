@@ -260,7 +260,7 @@ export async function tournamentWorkflow(
 
   // Final-round outputs (filled by Prometheus when the tournament converges).
   let mhdConfigPath: string | null = null
-  let observationProposal: string | null = null
+  let proposalPath: string | null = null
   let totalRounds = resumeFrom ? resumeFrom.round : 1
 
   // ─── Rounds (resumeFrom.round + 1)..MAX_ROUNDS: Explore → Oracle → Prometheus loop ───
@@ -429,7 +429,7 @@ export async function tournamentWorkflow(
 
   if (finalPrometheus.mhdConfig) {
     mhdConfigPath = finalPrometheus.mhdConfig.cfgPath
-    observationProposal = finalPrometheus.mhdConfig.observationProposal
+    proposalPath = finalPrometheus.mhdConfig.proposalPath
   }
 
   return {
@@ -438,6 +438,6 @@ export async function tournamentWorkflow(
     bestF1,
     totalRounds,
     mhdConfigPath,
-    observationProposal,
+    proposalPath,
   }
 }

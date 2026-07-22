@@ -73,3 +73,13 @@ export function getRoundsDir(project: string, round: number): string {
 export function getHypothesisDir(project: string, hypoId: string): string {
   return resolve(getProjectDir(project), 'hypotheses', hypoId)
 }
+
+/**
+ * Dataset directory — contains snapshots.jsonl, eval.py, and .venv.
+ * Defaults to `<BASE_DIR>/dataset` (i.e. `data/dataset/`).
+ * Override via env `DATASET_DIR` for custom locations.
+ */
+export function getDatasetDir(): string {
+  if (process.env.DATASET_DIR) return resolve(process.env.DATASET_DIR)
+  return resolve(getBaseDir(), 'dataset')
+}

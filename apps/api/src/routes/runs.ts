@@ -8,6 +8,7 @@ import {
   resolveModelArg,
 } from '@open-scientist/config'
 import {
+  completeRun,
   createCredentialStore,
   createRun,
   getProject,
@@ -137,6 +138,20 @@ runs.post('/api/projects/:name/runs', async (c) => {
   // look it up by the same id the client received in the response header.
   // project.id is the projects-table UUID (foreign reference).
   await createRun(projectName, project.id, { id: run.runId, status: 'running' })
+
+  // When the tournament settles, update the SQLite row with final status +
+  // metrics so GET /runs/:id returns accurate data after the SSE stream ends.
+  void run.result.then(
+    (output) => {
+      void completeRun(projectName, run.runId, 'completed', {
+        bestF1: output?.bestF1,
+        currentRound: output?.totalRounds,
+      })
+    },
+    () => {
+      void completeRun(projectName, run.runId, 'failed')
+    },
+  )
 
   return createUIMessageStreamResponse({
     stream: run.getReadable({ startIndex: 0 }).pipeThrough(
