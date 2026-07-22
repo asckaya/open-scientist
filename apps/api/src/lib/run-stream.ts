@@ -95,6 +95,10 @@ export function start(input: TournamentWorkflowInput): Run {
   // Kick off the tournament in the background. The abort signal is threaded
   // into tournamentWorkflow → sub-workflows → agent.stream so cancellation
   // actually halts in-flight LLM + tool calls (not just marks SQLite).
+  //
+  // Errors are caught here (not re-thrown) to prevent unhandled rejection from
+  // crashing the process. When an error occurs we emit an `error` UIMessageChunk
+  // so the client sees it on the SSE feed, then resolve `result` to `undefined`.
   const result = tournamentWorkflow({
     ...input,
     emitChunk: emit,
@@ -105,7 +109,13 @@ export function start(input: TournamentWorkflowInput): Run {
       if (abortController.signal.aborted) {
         return undefined as unknown as TournamentResult
       }
-      throw err
+      // Emit an error chunk so the client sees the failure on the SSE feed
+      // rather than the stream just silently ending.
+      emit({
+        type: 'error',
+        errorText: err instanceof Error ? err.message : String(err),
+      } as UIMessageChunk)
+      return undefined as unknown as TournamentResult
     },
   )
 
