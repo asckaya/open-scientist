@@ -2,7 +2,9 @@ import type { AgentRuntimeConfig, ModelArg } from '@open-scientist/config'
 import { ensureIndexes } from '@open-scientist/helix'
 import { createLogger } from '@open-scientist/logger'
 import type { HypothesisPool } from '@open-scientist/schema'
+import { persistAgentRun } from '../shared/persist.ts'
 import { type EmitChunk, streamAgentOutput } from '../shared/stream.ts'
+import { extractSubmitResult } from '../shared/tool-output.ts'
 import { createLibrarianAgent } from './agent.ts'
 
 const logger = createLogger('agents')
@@ -61,6 +63,7 @@ export async function librarianWorkflow(input: LibrarianWorkflowInput): Promise<
   const agent = await createLibrarianAgent({
     modelConfig: input.agentConfig?.modelConfig ?? input.modelConfig,
     projectId: input.projectId,
+    runId: input.runId,
     runtimeContext: {
       projectId: input.projectId,
       runId: input.runId,
@@ -79,11 +82,7 @@ export async function librarianWorkflow(input: LibrarianWorkflowInput): Promise<
   await ensureIndexes()
   logger.info('librarian workflow: starting agent.stream')
 
-  const result = await agent.stream({
-    messages: [
-      {
-        role: 'user',
-        content: `Seed hypothesis: ${input.seed}
+  const prompt = `Seed hypothesis: ${input.seed}
 
 Generate a diverse pool of 3-6 candidate hypotheses for the coronal heating mystery. For each hypothesis:
 1. State the physical mechanism (AC/DC/turbulent/combined), energy transport path, and dissipation location.
@@ -93,12 +92,15 @@ Generate a diverse pool of 3-6 candidate hypotheses for the coronal heating myst
 
 Load the 'solar-physics-rag' skill first for retrieval guidance and the Python filter template. Use searchPapers and searchHypotheses to ground your hypotheses in prior work and avoid duplication. Persist each hypothesis to HelixDB via addHypothesis (roundId=0, f1Score=0, runId=${input.runId}, createdAt=now ISO 8601) and write its Python filter to the workspace via writeFile.
 
-Return the HypothesisPool with rationale explaining your coverage strategy.`,
-      },
-    ],
+Return the HypothesisPool with rationale explaining your coverage strategy.`
+
+  const result = await agent.stream({
+    messages: [{ role: 'user', content: prompt }],
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)
-  return result.output
+  await persistAgentRun(input.projectId, input.runId, 'librarian', prompt, result)
+  const staticToolCalls = await result.staticToolCalls
+  return extractSubmitResult(staticToolCalls) as HypothesisPool
 }

@@ -1,6 +1,8 @@
 import type { AgentRuntimeConfig, ModelArg } from '@open-scientist/config'
 import type { EvalResult } from '@open-scientist/schema'
+import { persistAgentRun } from '../shared/persist.ts'
 import { type EmitChunk, streamAgentOutput } from '../shared/stream.ts'
+import { extractSubmitResult } from '../shared/tool-output.ts'
 import { createExploreAgent } from './agent.ts'
 
 export interface ExploreWorkflowInput {
@@ -56,6 +58,7 @@ export async function exploreWorkflow(input: ExploreWorkflowInput): Promise<Eval
   const agent = await createExploreAgent({
     modelConfig: input.agentConfig?.modelConfig ?? input.modelConfig,
     project: input.projectId,
+    runId: input.runId,
     hypoId: input.hypoId,
     runtimeContext: {
       projectId: input.projectId,
@@ -74,11 +77,7 @@ export async function exploreWorkflow(input: ExploreWorkflowInput): Promise<Eval
       : {}),
   })
 
-  const result = await agent.stream({
-    messages: [
-      {
-        role: 'user',
-        content: `Evaluate this hypothesis against the 1.75M solar physics snapshot dataset.
+  const prompt = `Evaluate this hypothesis against the 1.75M solar physics snapshot dataset.
 
 Hypothesis id: ${input.hypoId}
 Run id: ${input.runId}
@@ -98,12 +97,15 @@ Steps:
 3. Write run.py that loads snapshots, imports filter, evaluates all 1.75M, prints TP/FP/FN/F1 + first 5-10 counterexamples.
 4. Set up Python env if needed (python3 -m venv .venv && source .venv/bin/activate && uv pip install astropy sunpy scipy numpy).
 5. Run python3 run.py, read stdout, debug counterexamples, modify code, re-run until F1 converges or you hit the step limit.
-6. Return EvalResult with hypoId=${input.hypoId}, f1, truePositives, falsePositives, falseNegatives, counterexamples[] (physically specific), logs (commands + key stdout), executionMs.`,
-      },
-    ],
+6. Return EvalResult with hypoId=${input.hypoId}, f1, truePositives, falsePositives, falseNegatives, counterexamples[] (physically specific), logs (commands + key stdout), executionMs.`
+
+  const result = await agent.stream({
+    messages: [{ role: 'user', content: prompt }],
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)
-  return result.output
+  await persistAgentRun(input.projectId, input.runId, 'explore', prompt, result)
+  const staticToolCalls = await result.staticToolCalls
+  return extractSubmitResult(staticToolCalls) as EvalResult
 }

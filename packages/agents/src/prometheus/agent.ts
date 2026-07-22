@@ -8,7 +8,8 @@ import {
   discoverSkills,
 } from '@open-scientist/skills'
 import { createBashToolForHypothesis, mhdConfigTool } from '@open-scientist/tools'
-import { isStepCount, Output, ToolLoopAgent, type ToolSet } from 'ai'
+import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet } from 'ai'
+import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface PrometheusAgentDeps {
   /**
@@ -20,6 +21,8 @@ export interface PrometheusAgentDeps {
   modelConfig: ModelArg
   /** Project name — drives shared prometheus workspace dir isolation. */
   projectId: string
+  /** Run identifier — used for workspace dir isolation. */
+  runId: string
   /** Optional override toolset. When omitted, default tools are assembled. */
   tools?: ToolSet
   /** Optional system prompt override. When omitted, the hardcoded default is used. */
@@ -73,11 +76,12 @@ const PROMETHEUS_WORKSPACE = 'prometheus'
  */
 export async function getDefaultPrometheusTools(
   projectId: string,
+  runId: string,
   skillDirectories?: string[],
   mcpServers?: McpServerConfig[],
 ): Promise<ToolSet> {
   const dirs = skillDirectories ?? [DEFAULT_SKILLS_DIR]
-  const bashToolkit = await createBashToolForHypothesis(projectId, PROMETHEUS_WORKSPACE)
+  const bashToolkit = await createBashToolForHypothesis(projectId, runId, PROMETHEUS_WORKSPACE)
   const skills = await discoverSkills(createNodeSandbox(), dirs)
   const loadSkillTool = createLoadSkillTool(skills)
 
@@ -100,6 +104,7 @@ export async function getDefaultPrometheusTools(
 export async function createPrometheusAgent({
   modelConfig,
   projectId,
+  runId,
   tools,
   instructions,
   skillDirectories,
@@ -108,11 +113,18 @@ export async function createPrometheusAgent({
 }: PrometheusAgentDeps) {
   const model = createModelFromConfig(modelConfig)
   const resolvedTools =
-    tools ?? (await getDefaultPrometheusTools(projectId, skillDirectories, mcpServers))
+    tools ?? (await getDefaultPrometheusTools(projectId, runId, skillDirectories, mcpServers))
+
+  const toolsWithSubmit: ToolSet = {
+    ...resolvedTools,
+    submit_result: makeSubmitResultTool(PrometheusOutputSchema),
+  }
 
   return new ToolLoopAgent({
+    maxOutputTokens: 8192,
     id: 'prometheus',
     model,
+    toolChoice: 'auto',
     instructions:
       instructions ??
       `You are Prometheus, the multi-round planning agent (Scaling Test-time Compute) for the solar physics coronal heating investigation.
@@ -124,6 +136,12 @@ Your role:
 
 Use high thinking level for strategic planning.
 
+Environment:
+- This machine has \`uv\` (Python package manager) and \`pnpm\` (Node.js package manager) installed.
+- Use \`uv pip install <package>\` to install Python packages (e.g. uv pip install astropy sunpy scipy numpy).
+- Use \`uv run python script.py\` to run Python scripts with isolated dependencies.
+- Your working directory is a sandboxed workspace — all file operations (writeFile, readFile, bash) are restricted to this directory. Do not attempt to access files outside it.
+
 Tool guidance:
 - Load the 'mhd-config-gen' skill for MHD configuration generation guidance — do this FIRST on the final round (or when convergence is reached) before calling mhdConfig. The skill covers .cfg field layout, parameter derivation from the winning filter thresholds, the observation proposal format, and the recommended satellite/instrument table (SDO/AIA, SDO/HMI, Hinode/XRT, IRIS, Parker Solar Probe, Solar Orbiter).
 - Use mhdConfig ONLY on the final round: pass runId, winningHypoId, hypothesisStatement, and a physically-derived physicalParams record. The tool writes the .cfg and returns the MhdConfig object — embed it verbatim in your output.
@@ -134,10 +152,9 @@ Convergence rule (set shouldContinue):
 - shouldContinue = false when currentBestF1 >= 0.9 OR round >= 10 OR isFinalRound flag is set.
 - Otherwise shouldContinue = true.
 
-Output: PrometheusOutput { plan: PlanSchema, mhdConfig: MhdConfigSchema | null, shouldContinue: boolean }. On non-final rounds mhdConfig MUST be null; on the final round mhdConfig MUST be non-null and produced via the mhdConfig tool.`,
-    tools: resolvedTools,
-    output: Output.object({ schema: PrometheusOutputSchema }),
-    stopWhen: isStepCount(20),
+IMPORTANT: The ONLY way to complete your task is to call the submit_result tool. You MUST call it before reaching the step limit. Do not just output text — always call submit_result with your result with your PrometheusOutput { plan: PlanSchema, mhdConfig: MhdConfigSchema | null, shouldContinue: boolean }. On non-final rounds mhdConfig MUST be null; on the final round mhdConfig MUST be non-null and produced via the mhdConfig tool.`,
+    tools: toolsWithSubmit,
+    stopWhen: [isStepCount(30), hasToolCall('submit_result')],
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }

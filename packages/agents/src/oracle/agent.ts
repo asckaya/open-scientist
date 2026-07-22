@@ -13,7 +13,8 @@ import {
   createBashToolForHypothesis,
   getCritiquesByHypothesisTool,
 } from '@open-scientist/tools'
-import { isStepCount, Output, ToolLoopAgent, type ToolSet } from 'ai'
+import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet } from 'ai'
+import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface OracleAgentDeps {
   /**
@@ -25,6 +26,8 @@ export interface OracleAgentDeps {
   modelConfig: ModelArg
   /** Project name (used for workspace isolation + HelixDB scoping). */
   projectId: string
+  /** Run identifier — used for workspace dir isolation. */
+  runId: string
   /** Optional override toolset. When omitted, default tools are assembled. */
   tools?: ToolSet
   /** Optional system prompt override. When omitted, the hardcoded default is used. */
@@ -68,11 +71,12 @@ const ORACLE_WORKSPACE_HYPO = '__oracle__'
  */
 export async function getDefaultOracleTools(
   projectId: string,
+  runId: string,
   skillDirectories?: string[],
   mcpServers?: McpServerConfig[],
 ): Promise<ToolSet> {
   const dirs = skillDirectories ?? [DEFAULT_SKILLS_DIR]
-  const bashToolkit = await createBashToolForHypothesis(projectId, ORACLE_WORKSPACE_HYPO)
+  const bashToolkit = await createBashToolForHypothesis(projectId, runId, ORACLE_WORKSPACE_HYPO)
   const skills = await discoverSkills(createNodeSandbox(), dirs)
   const loadSkillTool = createLoadSkillTool(skills)
 
@@ -97,6 +101,7 @@ export async function getDefaultOracleTools(
 export async function createOracleAgent({
   modelConfig,
   projectId,
+  runId,
   tools,
   instructions,
   skillDirectories,
@@ -105,11 +110,18 @@ export async function createOracleAgent({
 }: OracleAgentDeps) {
   const model = createModelFromConfig(modelConfig)
   const resolvedTools =
-    tools ?? (await getDefaultOracleTools(projectId, skillDirectories, mcpServers))
+    tools ?? (await getDefaultOracleTools(projectId, runId, skillDirectories, mcpServers))
+
+  const toolsWithSubmit: ToolSet = {
+    ...resolvedTools,
+    submit_result: makeSubmitResultTool(OracleOutputSchema),
+  }
 
   return new ToolLoopAgent({
+    maxOutputTokens: 8192,
     id: 'oracle',
     model,
+    toolChoice: 'auto',
     instructions:
       instructions ??
       `You are Oracle, the Co-Scientist evaluator and tournament debater agent for the solar physics coronal heating investigation.
@@ -120,6 +132,12 @@ Your role:
 3. Eliminate low-score hypotheses (fill eliminatedIds with the ids of fatal / low-F1 hypotheses).
 4. Optionally name a winner (winningHypoId) when the tournament has converged this round — otherwise null.
 5. Debug counterexamples dialectically — cluster Explore's counterexamples by failure mode, decide fix vs. structural mutation vs. elimination.
+
+Environment:
+- This machine has \`uv\` (Python package manager) and \`pnpm\` (Node.js package manager) installed.
+- Use \`uv pip install <package>\` to install Python packages (e.g. uv pip install astropy sunpy scipy numpy).
+- Use \`uv run python script.py\` to run Python scripts with isolated dependencies.
+- Your working directory is a sandboxed workspace — all file operations (writeFile, readFile, bash) are restricted to this directory. Do not attempt to access files outside it.
 
 Tool guidance:
 - Load the 'critique-protocol' and 'hypothesis-mutation' skills FIRST for the 5-dimension scoring rubric, severity mapping (fatal/major/minor), mutation operator constraints, and the dialectical counterexample-debug flow.
@@ -136,10 +154,11 @@ Output contract (OracleOutputSchema):
 
 Each major/fatal critique must pair with either a mutation or an elimination. Critique text must be physically specific (point to concrete parameters / bands / failure modes), never generic ("theory is flawed").
 
-Tournament Evolution: act as a rigorous scientific reviewer. Use high thinking level for deep physical reasoning. Do NOT fabricate F1 numbers — Oracle only consumes Explore's EvalResults; it does not re-evaluate.`,
-    tools: resolvedTools,
-    output: Output.object({ schema: OracleOutputSchema }),
-    stopWhen: isStepCount(25),
+Tournament Evolution: act as a rigorous scientific reviewer. Use high thinking level for deep physical reasoning. Do NOT fabricate F1 numbers — Oracle only consumes Explore's EvalResults; it does not re-evaluate.
+
+IMPORTANT: The ONLY way to complete your task is to call the submit_result tool. You MUST call it before reaching the step limit. Do not just output text — always call submit_result with your result with your OracleOutput.`,
+    tools: toolsWithSubmit,
+    stopWhen: [isStepCount(40), hasToolCall('submit_result')],
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }

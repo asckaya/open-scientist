@@ -1,8 +1,9 @@
 import { createModelFromConfig, type ModelArg } from '@open-scientist/config'
 import { getMcpTools } from '@open-scientist/mcp'
 import { type McpServerConfig, TournamentResultSchema } from '@open-scientist/schema'
-import { isStepCount, Output, ToolLoopAgent, type ToolSet, tool } from 'ai'
+import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet, tool } from 'ai'
 import { z } from 'zod'
+import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface SisyphusAgentDeps {
   /**
@@ -137,7 +138,7 @@ export async function getDefaultSisyphusTools(mcpServers?: McpServerConfig[]): P
  * injects the user's response to resume. This replaces the deprecated
  * tool-level `needsApproval` mechanism.
  *
- * Output schema (TournamentResult) + stopWhen (isStepCount(50)) are fixed by
+ * Output schema (TournamentResult) + stopWhen (isStepCount(80)) are fixed by
  * the SPEC — do not change them.
  */
 export async function createSisyphusAgent({
@@ -150,9 +151,16 @@ export async function createSisyphusAgent({
   const model = createModelFromConfig(modelConfig)
   const resolvedTools = tools ?? (await getDefaultSisyphusTools(mcpServers))
 
+  const toolsWithSubmit: ToolSet = {
+    ...resolvedTools,
+    submit_result: makeSubmitResultTool(TournamentResultSchema),
+  }
+
   return new ToolLoopAgent({
+    maxOutputTokens: 8192,
     id: 'sisyphus',
     model,
+    toolChoice: 'auto',
     instructions:
       instructions ??
       `You are Sisyphus, the orchestrator agent of a solar physics multi-agent system investigating the coronal heating mystery.
@@ -174,10 +182,11 @@ Tournament protocol:
 
 At human-in-the-loop nodes (high-stakes rounds), call the \`review_leading_hypothesis\` tool to pause the tournament and ask the physicist to review the leader. The user can approve, reject, or inject steering feedback that downstream agents should incorporate.
 
-You are a conductor, not a specialist — do NOT run physics code, query HelixDB, or write MHD configs yourself. Delegate all concrete work to the 5 sub-agents via their workflows.`,
-    tools: resolvedTools,
-    output: Output.object({ schema: TournamentResultSchema }),
-    stopWhen: isStepCount(50),
+You are a conductor, not a specialist — do NOT run physics code, query HelixDB, or write MHD configs yourself. Delegate all concrete work to the 5 sub-agents via their workflows.
+
+IMPORTANT: The ONLY way to complete your task is to call the submit_result tool. You MUST call it before reaching the step limit. Do not just output text — always call submit_result with your result with your TournamentResult.`,
+    tools: toolsWithSubmit,
+    stopWhen: [isStepCount(80), hasToolCall('submit_result')],
     // Configure the review_leading_hypothesis tool to require user approval.
     // When the agent calls this tool, the stream suspends and emits a
     // `tool-approval-request` chunk. The Phase 4 API layer surfaces that to

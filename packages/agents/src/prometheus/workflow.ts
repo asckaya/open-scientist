@@ -1,7 +1,9 @@
 import type { AgentRuntimeConfig, ModelArg } from '@open-scientist/config'
 import type { PrometheusOutput } from '@open-scientist/schema'
 import type { ConvergenceEntry } from '../shared/convergence.ts'
+import { persistAgentRun } from '../shared/persist.ts'
 import { type EmitChunk, streamAgentOutput } from '../shared/stream.ts'
+import { extractSubmitResult } from '../shared/tool-output.ts'
 import { createPrometheusAgent } from './agent.ts'
 
 /** Re-exported for backward compatibility — sisyphus/logic.ts consumes this. */
@@ -81,6 +83,7 @@ export async function prometheusWorkflow(
   const agent = await createPrometheusAgent({
     modelConfig: input.agentConfig?.modelConfig ?? input.modelConfig,
     projectId: input.projectId,
+    runId: input.runId,
     runtimeContext: {
       projectId: input.projectId,
       runId: input.runId,
@@ -107,7 +110,7 @@ export async function prometheusWorkflow(
           .join('\n')
       : '  (no prior rounds — this is the first planning call)'
 
-  const messageContent = input.isFinalRound
+  const prompt = input.isFinalRound
     ? `Final round reached for run ${input.runId} (round ${input.round}). Convergence history:
 ${historyBlock}
 Current best F1: ${input.currentBestF1.toFixed(4)}
@@ -135,15 +138,12 @@ Steps:
 3. Output PrometheusOutput with: plan (round=${input.round}, adjusted searchParams.paramRange as a record of name -> [min, max], populationSize, mutationRate, computeBudget { maxEvals, parallelWorkers }, rationale explaining the explore/exploit tradeoff${input.userFeedback ? ' + how the reviewer feedback was incorporated' : ''}), mhdConfig = null, shouldContinue per the rule above.`
 
   const result = await agent.stream({
-    messages: [
-      {
-        role: 'user',
-        content: messageContent,
-      },
-    ],
+    messages: [{ role: 'user', content: prompt }],
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)
-  return result.output
+  await persistAgentRun(input.projectId, input.runId, 'prometheus', prompt, result)
+  const staticToolCalls = await result.staticToolCalls
+  return extractSubmitResult(staticToolCalls) as PrometheusOutput
 }

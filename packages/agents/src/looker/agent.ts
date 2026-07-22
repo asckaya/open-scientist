@@ -13,7 +13,8 @@ import {
   fitsAlignTool,
   getEvidenceByHypothesisTool,
 } from '@open-scientist/tools'
-import { isStepCount, Output, ToolLoopAgent, type ToolSet } from 'ai'
+import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet } from 'ai'
+import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface LookerAgentDeps {
   /**
@@ -25,6 +26,8 @@ export interface LookerAgentDeps {
   modelConfig: ModelArg
   /** Project name — drives workspace dir isolation + HelixDB scoping. */
   project: string
+  /** Run identifier — used for workspace dir isolation. */
+  runId: string
   /** Hypothesis id — each hypothesis gets its own isolated bash workspace. */
   hypoId: string
   /** Optional override toolset. When omitted, default tools are assembled. */
@@ -78,12 +81,13 @@ export interface LookerAgentDeps {
  */
 export async function getDefaultLookerTools(
   project: string,
+  runId: string,
   hypoId: string,
   skillDirectories?: string[],
   mcpServers?: McpServerConfig[],
 ): Promise<ToolSet> {
   const dirs = skillDirectories ?? [DEFAULT_SKILLS_DIR]
-  const bashToolkit = await createBashToolForHypothesis(project, hypoId)
+  const bashToolkit = await createBashToolForHypothesis(project, runId, hypoId)
   const skills = await discoverSkills(createNodeSandbox(), dirs)
   const loadSkillTool = createLoadSkillTool(skills)
 
@@ -108,6 +112,7 @@ export async function getDefaultLookerTools(
 export async function createLookerAgent({
   modelConfig,
   project,
+  runId,
   hypoId,
   tools,
   instructions,
@@ -117,11 +122,18 @@ export async function createLookerAgent({
 }: LookerAgentDeps) {
   const model = createModelFromConfig(modelConfig)
   const resolvedTools =
-    tools ?? (await getDefaultLookerTools(project, hypoId, skillDirectories, mcpServers))
+    tools ?? (await getDefaultLookerTools(project, runId, hypoId, skillDirectories, mcpServers))
+
+  const toolsWithSubmit: ToolSet = {
+    ...resolvedTools,
+    submit_result: makeSubmitResultTool(EvidenceAlignmentSchema),
+  }
 
   return new ToolLoopAgent({
+    maxOutputTokens: 8192,
     id: 'looker',
     model,
+    toolChoice: 'auto',
     instructions:
       instructions ??
       `You are Multimodal Looker, the cross-modal spatiotemporal data alignment agent for the solar physics coronal heating investigation.
@@ -138,6 +150,12 @@ Multimodal alignment physics guidance (no separate skill file — apply directly
 - Spatial index: heliographic Stonyhurst (LON, LAT) or Heliocentric-Cartesian (HPC x,y in arcsec). Derive from FITS header CRPIX1/CRPIX2 + CDELT1/CDELT2 + CTYPE1/CTYPE2. For MP4 video clips, the spatial index is the bounding box of the active region cutout (xrange, yrange in arcsec).
 - Alignment contract: FITS image and MP4 video clip MUST cover the same (AR, timestamp window, wavelength, spatial bbox). If the local FITS library has no match for the candidate, fall back to querying the remote SDO data center (JSOC / VSO) via sunpy, then cache the downloaded file path.
 
+Environment:
+- This machine has \`uv\` (Python package manager) and \`pnpm\` (Node.js package manager) installed.
+- Use \`uv pip install <package>\` to install Python packages (e.g. uv pip install astropy sunpy scipy numpy).
+- Use \`uv run python script.py\` to run Python scripts with isolated dependencies.
+- Your working directory is a sandboxed workspace — all file operations (writeFile, readFile, bash) are restricted to this directory. Do not attempt to access files outside it.
+
 Tool guidance:
 - Call the \`fitsAlign\` tool FIRST with (hypoId, activeRegion, timestamp, wavelength). It returns an EvidenceAlignment (fitsPaths + videoClipPath + metadata). NOTE: in the current environment fitsAlign is an informative stub that throws an install hint (astropy/sunpy not installed) — when that happens, surface the install instructions in your logs and fall back to running astropy/sunpy directly via the \`bash\` tool (write a Python script with writeFile, run \`python3 align.py\`, read stdout).
 - Use \`getEvidenceByHypothesis\` first to check whether evidence is already linked to this hypothesis (avoid redundant alignment work).
@@ -145,10 +163,9 @@ Tool guidance:
 - Use \`loadSkill\` to load the 'fits-snapshot-search' skill for the SDO/AIA wavelength set + snapshot field structure (reused as alignment keys).
 - Use \`writeFile\` to persist the alignment script + a manifest of FITS paths to the workspace for later audit.
 
-Output: EvidenceAlignment (hypoId, fitsPaths[], videoClipPath (nullable if no MP4 available), metadata {activeRegion, timestamp, wavelength, spatialIndex}). The spatialIndex must be a concrete string like "HPC (-420..-280, -180..-40) arcsec" — not a vague label.`,
-    tools: resolvedTools,
-    output: Output.object({ schema: EvidenceAlignmentSchema }),
-    stopWhen: isStepCount(20),
+IMPORTANT: The ONLY way to complete your task is to call the submit_result tool. You MUST call it before reaching the step limit. Do not just output text — always call submit_result with your result with your EvidenceAlignment (hypoId, fitsPaths[], videoClipPath (nullable if no MP4 available), metadata {activeRegion, timestamp, wavelength, spatialIndex}). The spatialIndex must be a concrete string like "HPC (-420..-280, -180..-40) arcsec" — not a vague label.`,
+    tools: toolsWithSubmit,
+    stopWhen: [isStepCount(30), hasToolCall('submit_result')],
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }

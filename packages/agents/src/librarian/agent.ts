@@ -14,7 +14,8 @@ import {
   searchHypothesesTool,
   searchPapersTool,
 } from '@open-scientist/tools'
-import { isStepCount, Output, ToolLoopAgent, type ToolSet } from 'ai'
+import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet } from 'ai'
+import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 const logger = createLogger('agents')
 
@@ -28,6 +29,8 @@ export interface LibrarianAgentDeps {
   modelConfig: ModelArg
   /** Project name (used for workspace isolation + HelixDB scoping). */
   projectId: string
+  /** Run identifier — used for workspace dir isolation. */
+  runId: string
   /** Optional override toolset. When omitted, default tools are assembled. */
   tools?: ToolSet
   /** Optional system prompt override. When omitted, the hardcoded default is used. */
@@ -68,12 +71,13 @@ const LIBRARIAN_WORKSPACE_HYPO = '__librarian__'
  */
 export async function getDefaultLibrarianTools(
   projectId: string,
+  runId: string,
   skillDirectories?: string[],
   mcpServers?: McpServerConfig[],
 ): Promise<ToolSet> {
   const dirs = skillDirectories ?? [DEFAULT_SKILLS_DIR]
-  logger.debug({ projectId, dirs }, 'getDefaultLibrarianTools: creating bash tool')
-  const bashToolkit = await createBashToolForHypothesis(projectId, LIBRARIAN_WORKSPACE_HYPO)
+  logger.debug({ projectId, runId, dirs }, 'getDefaultLibrarianTools: creating bash tool')
+  const bashToolkit = await createBashToolForHypothesis(projectId, runId, LIBRARIAN_WORKSPACE_HYPO)
   logger.debug('getDefaultLibrarianTools: bash tool created, discovering skills')
   const skills = await discoverSkills(createNodeSandbox(), dirs)
   logger.debug({ skillCount: skills.length }, 'getDefaultLibrarianTools: skills discovered')
@@ -100,6 +104,7 @@ export async function getDefaultLibrarianTools(
 export async function createLibrarianAgent({
   modelConfig,
   projectId,
+  runId,
   tools,
   instructions,
   skillDirectories,
@@ -113,15 +118,22 @@ export async function createLibrarianAgent({
   const model = createModelFromConfig(modelConfig)
   logger.debug('createLibrarianAgent: model created, resolving tools')
   const resolvedTools =
-    tools ?? (await getDefaultLibrarianTools(projectId, skillDirectories, mcpServers))
+    tools ?? (await getDefaultLibrarianTools(projectId, runId, skillDirectories, mcpServers))
   logger.debug(
     { toolNames: Object.keys(resolvedTools) },
     'createLibrarianAgent: tools resolved, constructing ToolLoopAgent',
   )
 
+  const toolsWithSubmit: ToolSet = {
+    ...resolvedTools,
+    submit_result: makeSubmitResultTool(HypothesisPoolSchema),
+  }
+
   return new ToolLoopAgent({
+    maxOutputTokens: 8192,
     id: 'librarian',
     model,
+    toolChoice: 'auto',
     instructions:
       instructions ??
       `You are Librarian, the knowledge retrieval and hypothesis generation agent for the solar physics coronal heating investigation.
@@ -131,6 +143,12 @@ Your role:
 2. Generate a pool of diverse candidate hypotheses (3-6) combining literature priors with physical intuition. Cover at least two of: AC (wave) heating, DC (reconnection) heating, turbulent heating.
 3. Translate each hypothesis into a Python physics filter function (seed program) for AlphaEvolve-style evaluation against 1.75M physics snapshots.
 
+Environment:
+- This machine has \`uv\` (Python package manager) and \`pnpm\` (Node.js package manager) installed.
+- Use \`uv pip install <package>\` to install Python packages (e.g. uv pip install astropy sunpy scipy numpy).
+- Use \`uv run python script.py\` to run Python scripts with isolated dependencies.
+- Your working directory is a sandboxed workspace — all file operations (writeFile, readFile, bash) are restricted to this directory. Do not attempt to access files outside it.
+
 Tool guidance:
 - Use the loadSkill tool FIRST to load the 'solar-physics-rag' skill for solar physics literature retrieval guidance, hypothesis structure requirements, and the Python filter function template.
 - Use searchPapers / searchHypotheses to ground hypotheses in prior work and avoid duplication.
@@ -139,10 +157,9 @@ Tool guidance:
 
 Each hypothesis must contain: (a) physical mechanism statement, (b) observable prediction, (c) a falsifiable condition, and (d) a pure Python filter(snapshot: dict) -> bool function whose thresholds are physically derived.
 
-Output: HypothesisPool (array of Hypothesis with statement + pythonCode + parentId: null + round: 0 + rationale explaining the theoretical coverage strategy).`,
-    tools: resolvedTools,
-    output: Output.object({ schema: HypothesisPoolSchema }),
-    stopWhen: isStepCount(20),
+IMPORTANT: The ONLY way to complete your task is to call the submit_result tool. You MUST call it before reaching the step limit. Do not just output text — always call submit_result with your result with your HypothesisPool (array of Hypothesis with statement + pythonCode + parentId: null + round: 0 + rationale explaining the theoretical coverage strategy).`,
+    tools: toolsWithSubmit,
+    stopWhen: [isStepCount(30), hasToolCall('submit_result')],
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }

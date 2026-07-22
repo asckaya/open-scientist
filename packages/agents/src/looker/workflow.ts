@@ -1,6 +1,8 @@
 import type { AgentRuntimeConfig, ModelArg } from '@open-scientist/config'
 import type { EvidenceAlignment } from '@open-scientist/schema'
+import { persistAgentRun } from '../shared/persist.ts'
 import { type EmitChunk, streamAgentOutput } from '../shared/stream.ts'
+import { extractSubmitResult } from '../shared/tool-output.ts'
 import { createLookerAgent } from './agent.ts'
 
 export interface LookerWorkflowInput {
@@ -50,6 +52,7 @@ export async function lookerWorkflow(input: LookerWorkflowInput): Promise<Eviden
   const agent = await createLookerAgent({
     modelConfig: input.agentConfig?.modelConfig ?? input.modelConfig,
     project: input.projectId,
+    runId: input.runId,
     hypoId: input.hypoId,
     runtimeContext: {
       projectId: input.projectId,
@@ -67,11 +70,7 @@ export async function lookerWorkflow(input: LookerWorkflowInput): Promise<Eviden
       : {}),
   })
 
-  const result = await agent.stream({
-    messages: [
-      {
-        role: 'user',
-        content: `Align the high-score candidate case for hypothesis ${input.hypoId} to raw FITS images + MP4 video clips.
+  const prompt = `Align the high-score candidate case for hypothesis ${input.hypoId} to raw FITS images + MP4 video clips.
 
 Run id: ${input.runId}
 Hypothesis id: ${input.hypoId}
@@ -88,12 +87,15 @@ Steps:
 3. Verify the returned FITS paths exist (readFile or ls via bash) and that the MP4 video clip path covers the same (AR, timestamp window, wavelength, spatial bbox) as the FITS images. If no MP4 is available, set videoClipPath to null.
 4. Derive a concrete spatialIndex string from the FITS header (e.g. "HPC (-420..-280, -180..-40) arcsec") — not a vague label.
 5. Persist the evidence via addEvidence with hypoId=${input.hypoId}, type='support' or 'contradict' based on what the imagery shows vs the hypothesis prediction, content (physical summary), f1Score (carry through), fitsPaths, videoPath, createdAt=now ISO 8601.
-6. Return EvidenceAlignment with hypoId=${input.hypoId}, fitsPaths[], videoClipPath (nullable), metadata {activeRegion, timestamp, wavelength, spatialIndex}.`,
-      },
-    ],
+6. Return EvidenceAlignment with hypoId=${input.hypoId}, fitsPaths[], videoClipPath (nullable), metadata {activeRegion, timestamp, wavelength, spatialIndex}.`
+
+  const result = await agent.stream({
+    messages: [{ role: 'user', content: prompt }],
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)
-  return result.output
+  await persistAgentRun(input.projectId, input.runId, 'looker', prompt, result)
+  const staticToolCalls = await result.staticToolCalls
+  return extractSubmitResult(staticToolCalls) as EvidenceAlignment
 }

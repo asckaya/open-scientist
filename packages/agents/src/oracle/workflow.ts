@@ -1,6 +1,8 @@
 import type { AgentRuntimeConfig, ModelArg } from '@open-scientist/config'
 import type { EvalResult, Hypothesis, OracleOutput } from '@open-scientist/schema'
+import { persistAgentRun } from '../shared/persist.ts'
 import { type EmitChunk, streamAgentOutput } from '../shared/stream.ts'
+import { extractSubmitResult } from '../shared/tool-output.ts'
 import { createOracleAgent } from './agent.ts'
 import { buildEvalSummaryBlock, buildHypothesesBlock } from './logic.ts'
 
@@ -49,6 +51,7 @@ export async function oracleWorkflow(input: OracleWorkflowInput): Promise<Oracle
   const agent = await createOracleAgent({
     modelConfig: input.agentConfig?.modelConfig ?? input.modelConfig,
     projectId: input.projectId,
+    runId: input.runId,
     runtimeContext: {
       projectId: input.projectId,
       runId: input.runId,
@@ -68,11 +71,7 @@ export async function oracleWorkflow(input: OracleWorkflowInput): Promise<Oracle
   const hypothesesBlock = buildHypothesesBlock(input.hypotheses, input.evalResults)
   const evalSummaryBlock = buildEvalSummaryBlock(input.evalResults)
 
-  const result = await agent.stream({
-    messages: [
-      {
-        role: 'user',
-        content: `Oracle round ${input.round} (runId=${input.runId}, projectId=${input.projectId}).
+  const prompt = `Oracle round ${input.round} (runId=${input.runId}, projectId=${input.projectId}).
 
 Below are the ${input.hypotheses.length} hypotheses evaluated this round, each with its F1 score and Explore counterexamples. Your job: critique every hypothesis, mutate the high-potential ones, eliminate the fatal / low-F1 ones, and name a winner ONLY if the tournament has clearly converged this round.
 
@@ -91,12 +90,15 @@ Steps:
 6. Fill eliminatedIds with the ids of hypotheses you eliminate this round (fatal critiques or persistently low F1).
 7. Set winningHypoId to the winning hypothesis id ONLY if convergence is reached this round; otherwise leave it null.
 
-Return OracleOutput (critiques[], mutations[], eliminatedIds[], winningHypoId). Each major/fatal critique must pair with either a mutation or an elimination.`,
-      },
-    ],
+Return OracleOutput (critiques[], mutations[], eliminatedIds[], winningHypoId). Each major/fatal critique must pair with either a mutation or an elimination.`
+
+  const result = await agent.stream({
+    messages: [{ role: 'user', content: prompt }],
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
   })
 
   await streamAgentOutput(result.fullStream, agent.tools, input.emitChunk)
-  return result.output
+  await persistAgentRun(input.projectId, input.runId, 'oracle', prompt, result)
+  const staticToolCalls = await result.staticToolCalls
+  return extractSubmitResult(staticToolCalls) as OracleOutput
 }
