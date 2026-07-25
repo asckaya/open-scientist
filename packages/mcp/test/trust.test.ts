@@ -89,7 +89,6 @@ describe('checkMcpTrust', () => {
       fingerprint: FINGERPRINT,
       trusted: true,
     })
-    fingerprintTools.mockResolvedValue({ toolA: 'hash-a', toolB: 'hash-b' })
     detectToolDrift.mockReturnValue({ added: [], removed: [], changed: [] })
 
     const result = await checkMcpTrust(PROJECT, SERVER, FINGERPRINT, makeTools())
@@ -99,11 +98,8 @@ describe('checkMcpTrust', () => {
     expect(result.added).toEqual([])
     expect(result.removed).toEqual([])
     expect(result.changed).toEqual([])
-    expect(fingerprintTools).toHaveBeenCalledTimes(1)
-    expect(detectToolDrift).toHaveBeenCalledWith(
-      { toolA: 'hash-a', toolB: 'hash-b' },
-      JSON.parse(FINGERPRINT),
-    )
+    expect(fingerprintTools).not.toHaveBeenCalled()
+    expect(detectToolDrift).toHaveBeenCalledWith(JSON.parse(FINGERPRINT), JSON.parse(FINGERPRINT))
   })
 
   it('trusted + added tools: drifted=true, trusted=false, added populated', async () => {
@@ -113,7 +109,6 @@ describe('checkMcpTrust', () => {
       fingerprint: FINGERPRINT,
       trusted: true,
     })
-    fingerprintTools.mockResolvedValue({ toolA: 'hash-a', toolB: 'hash-b', toolC: 'hash-c' })
     detectToolDrift.mockReturnValue({ added: ['toolC'], removed: [], changed: [] })
 
     const result = await checkMcpTrust(PROJECT, SERVER, FINGERPRINT, makeTools())
@@ -132,7 +127,6 @@ describe('checkMcpTrust', () => {
       fingerprint: FINGERPRINT,
       trusted: true,
     })
-    fingerprintTools.mockResolvedValue({ toolA: 'hash-a' })
     detectToolDrift.mockReturnValue({ added: [], removed: ['toolB'], changed: [] })
 
     const result = await checkMcpTrust(PROJECT, SERVER, FINGERPRINT, makeTools())
@@ -149,7 +143,6 @@ describe('checkMcpTrust', () => {
       fingerprint: FINGERPRINT,
       trusted: true,
     })
-    fingerprintTools.mockResolvedValue({ toolA: 'hash-a-changed', toolB: 'hash-b' })
     detectToolDrift.mockReturnValue({ added: [], removed: [], changed: ['toolA'] })
 
     const result = await checkMcpTrust(PROJECT, SERVER, FINGERPRINT, makeTools())
@@ -174,7 +167,6 @@ describe('checkMcpTrust', () => {
       fingerprint: FINGERPRINT,
       trusted: true,
     })
-    fingerprintTools.mockResolvedValue({ toolA: 'hash-a', toolB: 'hash-b' })
     // All three drift dimensions populated.
     detectToolDrift.mockReturnValue({ added: ['x'], removed: ['y'], changed: ['z'] })
 

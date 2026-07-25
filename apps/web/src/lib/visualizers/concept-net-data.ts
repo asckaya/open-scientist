@@ -2,13 +2,7 @@
  * HelixDB 图谱 / 假设池 → react-force-graph-3d 数据转换。
  */
 
-import type { Hypothesis } from '@open-scientist/schema'
-import type {
-  ConceptCategory,
-  ConceptLink,
-  ConceptNetData,
-  ConceptNode,
-} from '@/lib/types/visualizers'
+import type { ConceptCategory, ConceptNetData } from '@/lib/types/visualizers'
 
 /** 关键词 → ConceptCategory 简易分类 */
 export function classifyConcept(text: string): ConceptCategory {
@@ -91,41 +85,3 @@ export const DEFAULT_CONCEPT_NET: ConceptNetData = {
     { source: 'c7', target: 'c8', kind: 'references' },
   ],
 }
-
-/**
- * 从假设列表构建概念图。
- */
-export function buildConceptNetFromHypotheses(hypotheses: Hypothesis[]): ConceptNetData {
-  if (!hypotheses || hypotheses.length === 0) {
-    return DEFAULT_CONCEPT_NET
-  }
-
-  const nodes: ConceptNode[] = hypotheses.map((h) => ({
-    id: h.id,
-    label: h.statement.slice(0, 40) + (h.statement.length > 40 ? '…' : ''),
-    category: classifyConcept(h.statement),
-    hypothesisId: h.id,
-    state: h.status === 'eliminated' ? 'faded' : 'active',
-    description: h.statement,
-  }))
-
-  const links: ConceptLink[] = []
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i]!
-      const b = nodes[j]!
-      const sameCategory = a.category === b.category
-      if (sameCategory || i % 2 === j % 2) {
-        links.push({
-          source: a.id,
-          target: b.id,
-          kind: sameCategory ? 'supports' : 'references',
-        })
-      }
-    }
-  }
-
-  return { nodes, links }
-}
-
-export const EMPTY_CONCEPT_NET = DEFAULT_CONCEPT_NET

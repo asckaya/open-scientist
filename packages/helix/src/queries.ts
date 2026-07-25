@@ -9,8 +9,7 @@
 // 再由 client.query<T>().dynamic(req).send() 发送。
 //
 // 编译：vp run --filter @open-scientist/helix generate-queries
-// （Helix CLI v3 已无 `queries compile` 子命令；改用运行时 queries.generate 写入 src/queries.json，
-//   本文件末尾的 void queries.generate(...) 在 import 时即触发，generate-queries 脚本只是 import 一次。）
+// （运行时 queries.generate 在模块 import 时即写入 src/queries.json）
 
 import {
   defineParams,
@@ -389,8 +388,8 @@ const getLeaderboard = registerRead(
 )
 
 // 21b. getConceptByName — 配合 upsert 查重（read，提前列出）
-// 同 getSnapshot：统一改用 nWithLabelWhere（虽然 String 属性下 nWhere+hasLabel 也能命中，
-// 但为与其它按属性查节点的查询保持一致，并避免 i64 场景踩同样的坑，统一写法）。
+// 同 getSnapshot：统一用 nWithLabelWhere（i64 属性场景下 nWhere+hasLabel 不匹配，
+// 详见 getSnapshot 注释；String 属性碰巧能命中，但统一写法避免踩坑）。
 const getConceptByNameParams = defineParams({
   name: param.string(),
 })

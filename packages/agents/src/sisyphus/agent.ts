@@ -1,11 +1,20 @@
-import { createModelFromConfig, type ModelArg } from '@open-scientist/config'
-import { getMcpTools } from '@open-scientist/mcp'
+import {
+  createModelFromConfig,
+  thinkingLevelToProviderOptions,
+  type ModelArg,
+} from '@open-scientist/config'
 import { type McpServerConfig, TournamentResultSchema } from '@open-scientist/schema'
 import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet, tool } from 'ai'
 import { z } from 'zod'
+import { mergeMcpTools } from '../shared/tool-assembly.ts'
 import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface SisyphusAgentDeps {
+  /**
+   * Project name — required for MCP trust gating even though Sisyphus has no
+   * bash tool. MCP servers are connected per-project.
+   */
+  projectId: string
   /**
    * Serializable model descriptor — reconstructed into a `LanguageModel` inside
    * this factory via `createModelFromConfig`. Kept for uniformity with the
@@ -42,8 +51,7 @@ export interface SisyphusAgentDeps {
  * (continue), reject (force another round), or inject steering feedback.
  *
  * Approval is wired via `toolApproval` on the ToolLoopAgent constructor (see
- * `createSisyphusAgent` below), NOT via the deprecated tool-level
- * `needsApproval`. When `toolApproval.review_leading_hypothesis` returns
+ * `createSisyphusAgent` below). When `toolApproval.review_leading_hypothesis` returns
  * `'user-approval'`, the stream suspends and emits a `tool-approval-request`
  * chunk. The Phase 4 API layer captures that chunk, surfaces it to the user
  * via SSE, and injects the user's response back into the agent stream to
@@ -64,7 +72,7 @@ export interface SisyphusAgentDeps {
  */
 const reviewLeadingHypothesisTool = tool({
   description:
-    'Pause the tournament and ask the user to review the leading hypothesis. The user can approve (continue to the next round / final MHD generation), reject (force another evolution round), or provide steering feedback that Oracle/Prometheus should incorporate.',
+    'Pause the tournament and ask the user to review the leading hypothesis. The user can approve (continue to the next round / final MHD generation), reject (tournament continues but feedback is forwarded to Oracle/Prometheus as steering input), or provide steering feedback that Oracle/Prometheus should incorporate.',
   inputSchema: z.object({
     hypoId: z.string(),
     statement: z.string(),
@@ -90,8 +98,7 @@ const reviewLeadingHypothesisTool = tool({
  * Tools:
  * - `review_leading_hypothesis` — the Sisyphus-exclusive human-in-the-loop
  *   approval tool. Approval is configured via `toolApproval` on the
- *   ToolLoopAgent constructor (not the deprecated tool-level
- *   `needsApproval`). Used at the end of high-stakes rounds to let a
+ *   ToolLoopAgent constructor. Used at the end of high-stakes rounds to let a
  *   physicist review the leader before Prometheus commits to the next
  *   round's compute budget or the final MHD cfg.
  *
@@ -100,21 +107,18 @@ const reviewLeadingHypothesisTool = tool({
  * Keeping Sisyphus' toolset minimal prevents it from doing work that belongs
  * to the specialists.
  *
- * NOTE: This factory is async for symmetry with the other agents (so callers
- * can `await createSisyphusAgent(...)` uniformly). The current toolset is
- * constructed synchronously; the async boundary leaves room for future
- * MCP / skill discovery without changing the call signature.
+ * NOTE: This factory is async because it awaits `mergeMcpTools` (which
+ * establishes MCP client connections). Callers must `await` before
+ * `agent.stream()`.
  */
-export async function getDefaultSisyphusTools(mcpServers?: McpServerConfig[]): Promise<ToolSet> {
+export async function getDefaultSisyphusTools(
+  projectId: string,
+  mcpServers?: McpServerConfig[],
+): Promise<ToolSet> {
   const baseTools: ToolSet = {
     review_leading_hypothesis: reviewLeadingHypothesisTool,
   }
-  if (mcpServers && mcpServers.length > 0) {
-    for (const server of mcpServers) {
-      const mcpTools = await getMcpTools(server)
-      Object.assign(baseTools, mcpTools)
-    }
-  }
+  await mergeMcpTools(projectId, baseTools, mcpServers)
   return baseTools
 }
 
@@ -123,8 +127,8 @@ export async function getDefaultSisyphusTools(mcpServers?: McpServerConfig[]): P
  *
  * Sisyphus is the Tournament Evolution conductor. In the current Phase 4
  * implementation, `tournamentWorkflow` (workflow.ts) drives the tournament via
- * deterministic control flow — it direct-awaits the 5 sub-agent runs
- * (librarian → looker → explore ×N parallel → oracle → prometheus) and does
+ * deterministic control flow — it direct-awaits the 4 sub-agent runs
+ * (librarian → explore ×N parallel → oracle → prometheus) and does
  * NOT spin up a Sisyphus LLM loop itself. The agent is still constructed and
  * exported so the Phase 4 API layer can use it for:
  *   - interpreting free-form user steering messages mid-tournament,
@@ -135,13 +139,13 @@ export async function getDefaultSisyphusTools(mcpServers?: McpServerConfig[]): P
  * `review_leading_hypothesis` tool to require user approval: when the agent
  * calls that tool, the stream suspends and emits a `tool-approval-request`
  * chunk. The Phase 4 API layer surfaces that to the frontend via SSE and
- * injects the user's response to resume. This replaces the deprecated
- * tool-level `needsApproval` mechanism.
+ * injects the user's response to resume.
  *
- * Output schema (TournamentResult) + stopWhen (isStepCount(80)) are fixed by
+ * Output schema (TournamentResult) + stopWhen (isStepCount(120)) are fixed by
  * the SPEC — do not change them.
  */
 export async function createSisyphusAgent({
+  projectId,
   modelConfig,
   tools,
   instructions,
@@ -149,7 +153,11 @@ export async function createSisyphusAgent({
   runtimeContext,
 }: SisyphusAgentDeps) {
   const model = createModelFromConfig(modelConfig)
-  const resolvedTools = tools ?? (await getDefaultSisyphusTools(mcpServers))
+  const providerOptions = thinkingLevelToProviderOptions(
+    modelConfig.provider,
+    modelConfig.thinkingLevel,
+  )
+  const resolvedTools = tools ?? (await getDefaultSisyphusTools(projectId, mcpServers))
 
   const toolsWithSubmit: ToolSet = {
     ...resolvedTools,
@@ -160,6 +168,7 @@ export async function createSisyphusAgent({
     maxOutputTokens: 8192,
     id: 'sisyphus',
     model,
+    providerOptions,
     toolChoice: 'auto',
     instructions:
       instructions ??
@@ -191,12 +200,9 @@ export async function createSisyphusAgent({
     // When the agent calls this tool, the stream suspends and emits a
     // `tool-approval-request` chunk. The Phase 4 API layer surfaces that to
     // the frontend via SSE and injects the user's response to resume.
-    // This replaces the deprecated tool-level `needsApproval` mechanism.
     toolApproval: {
       review_leading_hypothesis: 'user-approval',
     },
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }
-
-export type SisyphusAgent = Awaited<ReturnType<typeof createSisyphusAgent>>

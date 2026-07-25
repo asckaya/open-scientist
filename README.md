@@ -82,8 +82,7 @@ vp run -r typecheck       # 全 11 包 tsc --noEmit
 ### 数据库
 
 ```bash
-vp run --filter @open-scientist/storage db:generate    # 生成 migration
-vp run --filter @open-scientist/storage db:migrate     # 执行 migration
+vp run --filter @open-scientist/storage db:generate    # 生成 migration SQL（schema 变更后执行）
 ```
 
 ## Tournament Evolution 工作流

@@ -1,23 +1,13 @@
-import { createModelFromConfig, type ModelArg } from '@open-scientist/config'
-import { createLogger } from '@open-scientist/logger'
-import { getMcpTools } from '@open-scientist/mcp'
-import { HypothesisPoolSchema, type McpServerConfig } from '@open-scientist/schema'
 import {
-  createLoadSkillTool,
-  createNodeSandbox,
-  DEFAULT_SKILLS_DIR,
-  discoverSkills,
-} from '@open-scientist/skills'
-import {
-  addHypothesisTool,
-  createBashToolForHypothesis,
-  searchHypothesesTool,
-  searchPapersTool,
-} from '@open-scientist/tools'
+  createModelFromConfig,
+  thinkingLevelToProviderOptions,
+  type ModelArg,
+} from '@open-scientist/config'
+import { type McpServerConfig, HypothesisPoolSchema } from '@open-scientist/schema'
+import { addHypothesisTool, searchHypothesesTool, searchPapersTool } from '@open-scientist/tools'
 import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet } from 'ai'
+import { assembleDefaultTools } from '../shared/tool-assembly.ts'
 import { makeSubmitResultTool } from '../shared/tool-output.ts'
-
-const logger = createLogger('agents')
 
 export interface LibrarianAgentDeps {
   /**
@@ -66,7 +56,7 @@ const LIBRARIAN_WORKSPACE_HYPO = '__librarian__'
  *   (project-scoped, not per-hypothesis; librarian only writes seed Python files)
  * - `loadSkill` — progressive disclosure (loads `solar-physics-rag` SKILL.md)
  *
- * NOTE: This function performs async I/O (HelixDB-agnostic fs scan + bash-tool sandbox
+ * NOTE: This function performs async I/O (skills fs scan + bash-tool workspace
  * init). Call it from an async context before `agent.stream()`.
  */
 export async function getDefaultLibrarianTools(
@@ -75,30 +65,18 @@ export async function getDefaultLibrarianTools(
   skillDirectories?: string[],
   mcpServers?: McpServerConfig[],
 ): Promise<ToolSet> {
-  const dirs = skillDirectories ?? [DEFAULT_SKILLS_DIR]
-  logger.debug({ projectId, runId, dirs }, 'getDefaultLibrarianTools: creating bash tool')
-  const bashToolkit = await createBashToolForHypothesis(projectId, runId, LIBRARIAN_WORKSPACE_HYPO)
-  logger.debug('getDefaultLibrarianTools: bash tool created, discovering skills')
-  const skills = await discoverSkills(createNodeSandbox(), dirs)
-  logger.debug({ skillCount: skills.length }, 'getDefaultLibrarianTools: skills discovered')
-  const loadSkillTool = createLoadSkillTool(skills)
-
-  const baseTools: ToolSet = {
-    searchPapers: searchPapersTool,
-    searchHypotheses: searchHypothesesTool,
-    addHypothesis: addHypothesisTool,
-    bash: bashToolkit.tools.bash,
-    readFile: bashToolkit.tools.readFile,
-    writeFile: bashToolkit.tools.writeFile,
-    loadSkill: loadSkillTool,
-  }
-  if (mcpServers && mcpServers.length > 0) {
-    for (const server of mcpServers) {
-      const mcpTools = await getMcpTools(server)
-      Object.assign(baseTools, mcpTools)
-    }
-  }
-  return baseTools
+  return assembleDefaultTools({
+    projectId,
+    runId,
+    workspaceSlot: LIBRARIAN_WORKSPACE_HYPO,
+    extraTools: {
+      searchPapers: searchPapersTool,
+      searchHypotheses: searchHypothesesTool,
+      addHypothesis: addHypothesisTool,
+    },
+    skillDirectories,
+    mcpServers,
+  })
 }
 
 export async function createLibrarianAgent({
@@ -111,18 +89,13 @@ export async function createLibrarianAgent({
   mcpServers,
   runtimeContext,
 }: LibrarianAgentDeps) {
-  logger.debug(
-    { provider: modelConfig.provider, model: modelConfig.model },
-    'createLibrarianAgent: creating model',
-  )
   const model = createModelFromConfig(modelConfig)
-  logger.debug('createLibrarianAgent: model created, resolving tools')
+  const providerOptions = thinkingLevelToProviderOptions(
+    modelConfig.provider,
+    modelConfig.thinkingLevel,
+  )
   const resolvedTools =
     tools ?? (await getDefaultLibrarianTools(projectId, runId, skillDirectories, mcpServers))
-  logger.debug(
-    { toolNames: Object.keys(resolvedTools) },
-    'createLibrarianAgent: tools resolved, constructing ToolLoopAgent',
-  )
 
   const toolsWithSubmit: ToolSet = {
     ...resolvedTools,
@@ -133,6 +106,7 @@ export async function createLibrarianAgent({
     maxOutputTokens: 8192,
     id: 'librarian',
     model,
+    providerOptions,
     toolChoice: 'auto',
     instructions:
       instructions ??
@@ -165,5 +139,3 @@ filter 函数接收的 snapshot 包含 SHARP 磁场参数（usflux、mean_gamma�
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }
-
-export type LibrarianAgent = Awaited<ReturnType<typeof createLibrarianAgent>>

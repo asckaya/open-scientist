@@ -1,14 +1,11 @@
-import { createModelFromConfig, type ModelArg } from '@open-scientist/config'
-import { getMcpTools } from '@open-scientist/mcp'
-import { EvalResultSchema, type McpServerConfig } from '@open-scientist/schema'
 import {
-  createLoadSkillTool,
-  createNodeSandbox,
-  DEFAULT_SKILLS_DIR,
-  discoverSkills,
-} from '@open-scientist/skills'
-import { createBashToolForHypothesis } from '@open-scientist/tools'
+  createModelFromConfig,
+  thinkingLevelToProviderOptions,
+  type ModelArg,
+} from '@open-scientist/config'
+import { EvalResultSchema, type McpServerConfig } from '@open-scientist/schema'
 import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet } from 'ai'
+import { assembleDefaultTools } from '../shared/tool-assembly.ts'
 import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface ExploreAgentDeps {
@@ -20,7 +17,7 @@ export interface ExploreAgentDeps {
    */
   modelConfig: ModelArg
   /** Project name — drives workspace dir isolation. */
-  project: string
+  projectId: string
   /** Run identifier — used for workspace dir isolation. */
   runId: string
   /** Hypothesis id — each hypothesis gets its own isolated bash workspace. */
@@ -58,42 +55,31 @@ export interface ExploreAgentDeps {
  *   no sandbox — runs Python directly on host per AGENTS.md decision)
  * - `loadSkill` — progressive disclosure (loads `fits-snapshot-search` SKILL.md)
  *
- * NOTE: createBashTool is async (sandbox init), so this whole factory is async. Call
+ * NOTE: createBashToolForHypothesis is async (workspace dir creation), so this whole factory is async. Call
  * it before `agent.stream()`.
  *
  * Each hypothesis evaluation gets a FRESH agent instance + FRESH bash workspace, so
  * parallel evaluations (Sisyphus spawns N explore runs) don't share working dirs.
  */
 export async function getDefaultExploreTools(
-  project: string,
+  projectId: string,
   runId: string,
   hypoId: string,
   skillDirectories?: string[],
   mcpServers?: McpServerConfig[],
 ): Promise<ToolSet> {
-  const dirs = skillDirectories ?? [DEFAULT_SKILLS_DIR]
-  const bashToolkit = await createBashToolForHypothesis(project, runId, hypoId)
-  const skills = await discoverSkills(createNodeSandbox(), dirs)
-  const loadSkillTool = createLoadSkillTool(skills)
-
-  const baseTools: ToolSet = {
-    bash: bashToolkit.tools.bash,
-    readFile: bashToolkit.tools.readFile,
-    writeFile: bashToolkit.tools.writeFile,
-    loadSkill: loadSkillTool,
-  }
-  if (mcpServers && mcpServers.length > 0) {
-    for (const server of mcpServers) {
-      const mcpTools = await getMcpTools(server)
-      Object.assign(baseTools, mcpTools)
-    }
-  }
-  return baseTools
+  return assembleDefaultTools({
+    projectId,
+    runId,
+    workspaceSlot: hypoId,
+    skillDirectories,
+    mcpServers,
+  })
 }
 
 export async function createExploreAgent({
   modelConfig,
-  project,
+  projectId,
   runId,
   hypoId,
   tools,
@@ -103,8 +89,12 @@ export async function createExploreAgent({
   runtimeContext,
 }: ExploreAgentDeps) {
   const model = createModelFromConfig(modelConfig)
+  const providerOptions = thinkingLevelToProviderOptions(
+    modelConfig.provider,
+    modelConfig.thinkingLevel,
+  )
   const resolvedTools =
-    tools ?? (await getDefaultExploreTools(project, runId, hypoId, skillDirectories, mcpServers))
+    tools ?? (await getDefaultExploreTools(projectId, runId, hypoId, skillDirectories, mcpServers))
 
   const toolsWithSubmit: ToolSet = {
     ...resolvedTools,
@@ -115,6 +105,7 @@ export async function createExploreAgent({
     maxOutputTokens: 8192,
     id: 'explore',
     model,
+    providerOptions,
     toolChoice: 'auto',
     instructions:
       instructions ??
@@ -150,5 +141,3 @@ export async function createExploreAgent({
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }
-
-export type ExploreAgent = Awaited<ReturnType<typeof createExploreAgent>>

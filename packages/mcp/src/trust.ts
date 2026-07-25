@@ -1,5 +1,5 @@
 import { getTrust, setTrust } from '@open-scientist/storage'
-import { detectToolDrift, fingerprintTools, type ToolSet } from 'ai'
+import { detectToolDrift, type ToolSet } from 'ai'
 
 export interface TrustResult {
   trusted: boolean
@@ -33,9 +33,8 @@ export async function checkMcpTrust(
     return { trusted: false, drifted: false, added: [], removed: [], changed: [] }
   }
 
-  // 检测工具漂移
-  const currentFingerprint = await fingerprintTools(tools)
-  const drift = detectToolDrift(currentFingerprint, JSON.parse(existing.fingerprint))
+  // 检测工具漂移 — reuse the fingerprint passed by the caller instead of recomputing
+  const drift = detectToolDrift(JSON.parse(fingerprint), JSON.parse(existing.fingerprint))
   const drifted = drift.added.length > 0 || drift.removed.length > 0 || drift.changed.length > 0
   return {
     trusted: !drifted,

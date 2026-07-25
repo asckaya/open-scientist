@@ -7,7 +7,7 @@
  * 3. 流中断（未 finish）→ 自动 reconnectRunStream GET 续传
  * 4. 用户停止 → stopRun POST，不自动重连
  *
- * 不依赖 assistant-ui runtime（先打基础，集成 assistant-ui 在后续 Phase）。
+ * 不依赖 assistant-ui runtime。
  */
 
 'use client'
@@ -137,7 +137,7 @@ export function useRunStream(opts: UseRunStreamOptions): UseRunStreamReturn {
         }
         case 'start-step':
         case 'finish-step':
-          // step 边界，当前不特殊处理（可后续渲染 step 分隔）
+          // step 边界，当前不特殊处理
           break
         case 'text-start': {
           pushPart({ id: chunk.id, kind: 'text', text: '' })

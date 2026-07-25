@@ -15,7 +15,6 @@ export const runs = sqliteTable('runs', {
   }).notNull(),
   startedAt: text('started_at').notNull(),
   endedAt: text('ended_at'),
-  resumeStateBlob: text('resume_state_blob'),
   currentRound: integer('current_round').notNull().default(0),
   bestF1: real('best_f1').notNull().default(0),
 })
@@ -26,15 +25,6 @@ export const messages = sqliteTable('messages', {
   role: text('role', { enum: ['user', 'assistant', 'system', 'tool'] }).notNull(),
   partsJson: text('parts_json').notNull(),
   createdAt: text('created_at').notNull(),
-})
-
-export const steeringMessages = sqliteTable('steering_messages', {
-  id: text('id').primaryKey(),
-  runId: text('run_id').notNull(),
-  content: text('content').notNull(),
-  mode: text('mode', { enum: ['steering', 'follow-up'] }).notNull(),
-  injectedAt: text('injected_at'),
-  status: text('status', { enum: ['pending', 'injected', 'skipped'] }).notNull(),
 })
 
 export const hypotheses = sqliteTable('hypotheses', {
@@ -87,12 +77,4 @@ export const plans = sqliteTable('plans', {
   mhdCfgPath: text('mhd_cfg_path'),
   proposalPath: text('proposal_path'),
   createdAt: text('created_at').notNull(),
-})
-
-export const logs = sqliteTable('logs', {
-  id: text('id').primaryKey(),
-  runId: text('run_id'),
-  level: text('level', { enum: ['debug', 'info', 'warn', 'error'] }).notNull(),
-  messageJson: text('message_json').notNull(),
-  timestamp: text('timestamp').notNull(),
 })

@@ -1,19 +1,12 @@
-import { createModelFromConfig, type ModelArg } from '@open-scientist/config'
-import { getMcpTools } from '@open-scientist/mcp'
+import {
+  createModelFromConfig,
+  thinkingLevelToProviderOptions,
+  type ModelArg,
+} from '@open-scientist/config'
 import { EvidenceAlignmentSchema, type McpServerConfig } from '@open-scientist/schema'
-import {
-  createLoadSkillTool,
-  createNodeSandbox,
-  DEFAULT_SKILLS_DIR,
-  discoverSkills,
-} from '@open-scientist/skills'
-import {
-  addEvidenceTool,
-  createBashToolForHypothesis,
-  fitsAlignTool,
-  getEvidenceByHypothesisTool,
-} from '@open-scientist/tools'
+import { addEvidenceTool, fitsAlignTool, getEvidenceByHypothesisTool } from '@open-scientist/tools'
 import { hasToolCall, isStepCount, ToolLoopAgent, type ToolSet } from 'ai'
+import { assembleDefaultTools } from '../shared/tool-assembly.ts'
 import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface LookerAgentDeps {
@@ -25,7 +18,7 @@ export interface LookerAgentDeps {
    */
   modelConfig: ModelArg
   /** Project name — drives workspace dir isolation + HelixDB scoping. */
-  project: string
+  projectId: string
   /** Run identifier — used for workspace dir isolation. */
   runId: string
   /** Hypothesis id — each hypothesis gets its own isolated bash workspace. */
@@ -73,45 +66,36 @@ export interface LookerAgentDeps {
  *   which documents the SDO/AIA wavelength set + snapshot field structure that
  *   the Looker reuses for alignment keying)
  *
- * NOTE: createBashTool + discoverSkills are async, so this whole factory is async.
- * Call it before `agent.stream()`.
+ * NOTE: This factory is async because `assembleDefaultTools` performs async I/O
+ * (bash workspace dir creation + skills discovery). Call it before `agent.stream()`.
  *
  * Each hypothesis alignment gets a FRESH agent instance + FRESH bash workspace, so
- * parallel alignments (Sisyphus spawns N looker runs) don't share working dirs.
+ * parallel alignments (when wired in, the orchestrator would spawn N looker runs) don't share working dirs.
  */
 export async function getDefaultLookerTools(
-  project: string,
+  projectId: string,
   runId: string,
   hypoId: string,
   skillDirectories?: string[],
   mcpServers?: McpServerConfig[],
 ): Promise<ToolSet> {
-  const dirs = skillDirectories ?? [DEFAULT_SKILLS_DIR]
-  const bashToolkit = await createBashToolForHypothesis(project, runId, hypoId)
-  const skills = await discoverSkills(createNodeSandbox(), dirs)
-  const loadSkillTool = createLoadSkillTool(skills)
-
-  const baseTools: ToolSet = {
-    fitsAlign: fitsAlignTool,
-    getEvidenceByHypothesis: getEvidenceByHypothesisTool,
-    addEvidence: addEvidenceTool,
-    bash: bashToolkit.tools.bash,
-    readFile: bashToolkit.tools.readFile,
-    writeFile: bashToolkit.tools.writeFile,
-    loadSkill: loadSkillTool,
-  }
-  if (mcpServers && mcpServers.length > 0) {
-    for (const server of mcpServers) {
-      const mcpTools = await getMcpTools(server)
-      Object.assign(baseTools, mcpTools)
-    }
-  }
-  return baseTools
+  return assembleDefaultTools({
+    projectId,
+    runId,
+    workspaceSlot: hypoId,
+    extraTools: {
+      fitsAlign: fitsAlignTool,
+      getEvidenceByHypothesis: getEvidenceByHypothesisTool,
+      addEvidence: addEvidenceTool,
+    },
+    skillDirectories,
+    mcpServers,
+  })
 }
 
 export async function createLookerAgent({
   modelConfig,
-  project,
+  projectId,
   runId,
   hypoId,
   tools,
@@ -121,8 +105,12 @@ export async function createLookerAgent({
   runtimeContext,
 }: LookerAgentDeps) {
   const model = createModelFromConfig(modelConfig)
+  const providerOptions = thinkingLevelToProviderOptions(
+    modelConfig.provider,
+    modelConfig.thinkingLevel,
+  )
   const resolvedTools =
-    tools ?? (await getDefaultLookerTools(project, runId, hypoId, skillDirectories, mcpServers))
+    tools ?? (await getDefaultLookerTools(projectId, runId, hypoId, skillDirectories, mcpServers))
 
   const toolsWithSubmit: ToolSet = {
     ...resolvedTools,
@@ -133,6 +121,7 @@ export async function createLookerAgent({
     maxOutputTokens: 8192,
     id: 'looker',
     model,
+    providerOptions,
     toolChoice: 'auto',
     instructions:
       instructions ??
@@ -169,5 +158,3 @@ export async function createLookerAgent({
     ...(runtimeContext !== undefined ? { runtimeContext } : {}),
   })
 }
-
-export type LookerAgent = Awaited<ReturnType<typeof createLookerAgent>>

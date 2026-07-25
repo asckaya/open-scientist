@@ -48,11 +48,6 @@ export async function getRun(projectName: string, runId: string) {
   return db.select().from(runs).where(eq(runs.id, runId)).all()[0] ?? null
 }
 
-export async function listRuns(projectName: string) {
-  const { db } = createProjectDb(projectName)
-  return db.select().from(runs).all()
-}
-
 export async function updateRunStatus(projectName: string, runId: string, status: RunStatus) {
   const { db } = createProjectDb(projectName)
   db.update(runs)
@@ -90,19 +85,4 @@ export async function completeRun(
     })
     .where(eq(runs.id, runId))
     .run()
-}
-
-export async function saveResumeState(projectName: string, runId: string, blob: string) {
-  const { db } = createProjectDb(projectName)
-  db.update(runs).set({ resumeStateBlob: blob }).where(eq(runs.id, runId)).run()
-}
-
-export async function updateRound(
-  projectName: string,
-  runId: string,
-  round: number,
-  bestF1: number,
-) {
-  const { db } = createProjectDb(projectName)
-  db.update(runs).set({ currentRound: round, bestF1 }).where(eq(runs.id, runId)).run()
 }

@@ -22,6 +22,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@open-scientist/config": "workspace:*",
     "@open-scientist/helix": "workspace:*",
+    "@open-scientist/logger": "workspace:*",
     "@open-scientist/schema": "workspace:*",
     "@open-scientist/storage": "workspace:*",
     "ai": "^7.0.31",
