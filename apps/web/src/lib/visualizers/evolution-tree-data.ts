@@ -1,5 +1,5 @@
 /**
- * hypotheses + mutations + critiques → d3-hierarchy 树数据转换。
+ * hypotheses + mutations + critiques → tree data 转换。
  */
 
 import type { Hypothesis } from '@open-scientist/schema'

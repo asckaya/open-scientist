@@ -41,7 +41,10 @@ export function resolveTransport(server: McpServerConfig): MCPClientConfig['tran
  * Connect to an MCP server (or return cached tools). MCP servers are trusted
  * automatically — no trust gate, fingerprint, or drift detection is performed.
  */
-export async function getMcpTools(projectName: string, server: McpServerConfig) {
+export async function getMcpTools(
+  projectName: string,
+  server: McpServerConfig,
+): Promise<Awaited<ReturnType<MCPClient['tools']>>> {
   const key = cacheKey(projectName, server.name)
   const existing = clients.get(key)
   if (existing) {

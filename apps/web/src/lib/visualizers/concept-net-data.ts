@@ -1,5 +1,5 @@
 /**
- * HelixDB 图谱 / 假设池 → react-force-graph-3d 数据转换。
+ * HelixDB 图谱 / 假设池 → 概念网络数据转换。
  */
 
 import type { RoundUpdatePayload } from '@/lib/types/sse-events'

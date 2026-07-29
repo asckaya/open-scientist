@@ -70,8 +70,8 @@
 - **Prometheus**：mhdConfig + bash（`__prometheus__` workspace）+ loadSkill（mhd-config-gen）
 - **Sisyphus**：`review_leading_hypothesis` tool（`needsApproval: true`，Phase 4 接 approval transport）+ `tournamentWorkflow`（纯确定性控制流：Round 1 librarian → Loop(explore 并行 background spawn → oracle direct await → prometheus → 收敛检测) → 末轮 MHD cfg）
 - **steps/index.ts（Sisyphus）**：`spawnExploreEvalStep` / `waitForRunStep` / `snapshotStep`（三个 `'use step'` 函数）
-- **关键 API 事实**：`getWritable` 从 `workflow` 导入；`ModelCallStreamPart` 从 `@ai-sdk/workflow` 导入；`result.output` 不是 Promise；`start(childWorkflow, [args])` 返回 `Run<TResult>`，`await run.returnValue` 拿 output；`needsApproval` 在 AI SDK 7 被 deprecated 但 tool-level 仍是唯一机制
-- **重构**：`sisyphus/logic.ts` 提取 6 个纯函数（updateHypothesesWithEval/computeLeader/shouldStopByTarget/applyOraclePruning/buildConvergenceEntry/shouldStopByPrometheus）；`oracle/logic.ts` 提取 buildHypothesesBlock/buildEvalSummaryBlock；`apps/api/src/lib/deep-merge.ts` 提取 deepMerge
+- **关键 API 事实**（WorkflowAgent 时代，已迁移）：`getWritable` 从 `workflow` 导入；`ModelCallStreamPart` 从 `@ai-sdk/workflow` 导入；`result.output` 不是 Promise；`start(childWorkflow, [args])` 返回 `Run<TResult>`，`await run.returnValue` 拿 output；`needsApproval` 在 AI SDK 7 被 deprecated 但 tool-level 仍是唯一机制
+- **重构**：`sisyphus/logic.ts` 提取 6 个纯函数（updateHypothesesWithEval/computeLeader/shouldStopByTarget/applyOraclePruning/buildConvergenceEntry/shouldStopByPrometheus）；`oracle/logic.ts` 提取 buildHypothesesBlock/buildEvalSummaryBlock；`apps/api/src/lib/deep-merge.ts` 提取 deepMerge（logic.ts 后在 ToolLoopAgent 迁移时内联进 workflow.ts）
 
 #### `9e84fd7` — test: expand coverage 28→341
 
@@ -391,8 +391,8 @@
 4. **人机协同审批**（`POST /projects/:name/runs/:runId/approve`，P1）：
    - `review_leading_hypothesis` tool 带 `needsApproval: true`，workflow 暂停 + persist resume state
    - 客户端 POST `{approved: bool, reason?}` → workflow resume
-   - **难点**：AI SDK 7 的 `needsApproval` 被 deprecated，替代方案是 `streamText` 的 `toolApproval` option，但 `WorkflowAgentStreamOptions` 不暴露该 option。需调研 workflow resume 机制（`continueStream`）或自建 approval queue
-   - **TODO**：Phase 4 先实现 P0 端点，approval 留 P1 调研
+   - **难点**：AI SDK 7 的 `needsApproval` 被 deprecated，替代方案是 `streamText` 的 `toolApproval` option（ToolLoopAgent 构造时或 `prepareCall` 返回值设置）。需调研或自建 approval queue
+   - **未实现**：Phase 4 先实现 P0 端点，approval 留 P1
 
 5. **Steering 注入**（`POST /projects/:name/runs/:runId/steer`，P1）：
    - 接收 `{content, mode: 'steering'|'follow-up'}`

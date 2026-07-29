@@ -1,6 +1,6 @@
 // HelixDB DSL 查询定义（运行时 generate 生成 queries.json）
 //
-// 26 个查询（15 read + 11 write），覆盖太阳物理多智能体假设生成系统的
+// 23 个查询（12 read + 11 write），覆盖太阳物理多智能体假设生成系统的
 // RAG 检索 + 关系遍历 + 演化链 + 快照写回。其中 21 个对应 spec 必需项，
 // 5 个为拆分/辅助查询（addCitesEdge / addSupportingEvidence / addContradictingEvidence /
 // addCaptureInEdge / getConceptByName / updateConceptDescription），用于规避静态 builder
@@ -111,25 +111,6 @@ const searchPapers = registerRead(
   searchPapersParams,
 )
 
-// 2. searchPapersVector — Paper 向量近邻检索
-const searchPapersVectorParams = defineParams({
-  queryVector: param.array(param.f32()),
-  k: param.i64(),
-})
-
-const searchPapersVector = registerRead(
-  (p) =>
-    readBatch()
-      .varAs(
-        'papers',
-        g()
-          .vectorSearchNodesWith('Paper', 'embedding', p.queryVector, p.k ?? 10)
-          .project(PAPER_PROJ),
-      )
-      .returning(['papers']),
-  searchPapersVectorParams,
-)
-
 // 3. searchHypotheses — Hypothesis statement 文本检索
 const searchHypothesesParams = defineParams({
   queryText: param.string(),
@@ -147,25 +128,6 @@ const searchHypotheses = registerRead(
       )
       .returning(['hypos']),
   searchHypothesesParams,
-)
-
-// 4. searchHypothesesVector — Hypothesis 向量近邻检索
-const searchHypothesesVectorParams = defineParams({
-  queryVector: param.array(param.f32()),
-  k: param.i64(),
-})
-
-const searchHypothesesVector = registerRead(
-  (p) =>
-    readBatch()
-      .varAs(
-        'hypos',
-        g()
-          .vectorSearchNodesWith('Hypothesis', 'embedding', p.queryVector, p.k ?? 10)
-          .project(HYPOTHESIS_PROJ),
-      )
-      .returning(['hypos']),
-  searchHypothesesVectorParams,
 )
 
 // 5. getPaper — 按 id 取 Paper
@@ -195,28 +157,6 @@ const getHypothesis = registerRead(
       )
       .returning(['hypo']),
   getHypothesisParams,
-)
-
-// 7. getHypothesesByPaper — Paper → in('PROPOSED_IN') → Hypothesis
-//    （PROPOSED_IN: Hypothesis → Paper；从 Paper 侧 in() 反向取 Hypothesis）
-const getHypothesesByPaperParams = defineParams({
-  paperId: param.i64(),
-})
-
-const getHypothesesByPaper = registerRead(
-  (p) =>
-    readBatch()
-      .varAs(
-        'hypos',
-        g()
-          .n(NodeRef.param(p.paperId.name))
-          .hasLabel('Paper')
-          .in('PROPOSED_IN')
-          .hasLabel('Hypothesis')
-          .project(HYPOTHESIS_PROJ),
-      )
-      .returning(['hypos']),
-  getHypothesesByPaperParams,
 )
 
 // 8. getEvidenceByHypothesis — Hypothesis → out('SUPPORTED_BY'|'CONTRADICTED_BY') → Evidence
@@ -706,12 +646,9 @@ const ensureIndexes = registerWrite(
 export const queries = defineQueries({
   read: {
     searchPapers,
-    searchPapersVector,
     searchHypotheses,
-    searchHypothesesVector,
     getPaper,
     getHypothesis,
-    getHypothesesByPaper,
     getEvidenceByHypothesis,
     getCritiquesByHypothesis,
     getRelatedConcepts,

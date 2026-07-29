@@ -60,8 +60,9 @@ packages/
 
 部分 role 还有：
 
-- `logic.ts` — 纯函数（sisyphus/oracle/prometheus）
 - `snapshot.ts` — `snapshotStep` + `RoundSnapshot`（sisyphus 独有）
+
+> 纯函数（sisyphus 的收敛检测 / oracle 的 block 构建等）已内联到各自 `workflow.ts` 中，无单独 `logic.ts` 文件。
 
 **`shared/stream.ts`**：`streamAgentOutput<TOOLS>(fullStream, tools, emitChunk)` 用 `toUIMessageStream({stream, tools})` 把 ToolLoopAgent 的 `result.fullStream`（`AsyncIterableStream<TextStreamPart<TOOLS>>`）转成 `ReadableStream<UIMessageChunk>`，逐 chunk 调 `emitChunk(chunk)`。`EmitChunk = (chunk: UIMessageChunk) => void`。
 
@@ -71,7 +72,7 @@ packages/
 
 **context 传递**：`ModelArg`（plain object `{provider, model, baseURL?, apiKey, thinkingLevel, apiMode}`）是跨调用边界的 model 配置载体。workflow 函数内调 `createModelFromConfig(modelConfig)` 重建 `LanguageModel`。agent 工厂构造时用 `thinkingLevelToProviderOptions(provider, thinkingLevel)` 生成 `providerOptions` 传给 `ToolLoopAgent`，让 SDK 消费 thinkingLevel（openai→`reasoningEffort`，anthropic→`thinking`）。`runtimeContext` 也是 plain object（`{projectId, runId, round?, hypoId?}`），在构造 ToolLoopAgent 时传入。
 
-**ToolLoopAgent.stream 关键点**：返回 `Promise<StreamTextResult>`（**必须 await**，WorkflowAgent.stream 是同步的）。`result.fullStream: AsyncIterableStream<TextStreamPart<TOOLS>>`（是 `AsyncIterable<T> & ReadableStream<T>`，可直接喂给 `toUIMessageStream`）。`result.output: Promise<OUTPUT>`。
+**ToolLoopAgent.stream 关键点**：返回 `Promise<StreamTextResult>`（**必须 await**）。`result.fullStream: AsyncIterableStream<TextStreamPart<TOOLS>>`（是 `AsyncIterable<T> & ReadableStream<T>`，可直接喂给 `toUIMessageStream`）。`result.output: Promise<OUTPUT>`。
 
 **Sisyphus agent 特殊**：`createSisyphusAgent` 构造的 agent **未被 tournamentWorkflow 调用**——tournamentWorkflow 是纯确定性控制流，直接 await 5 个子 workflow。Sisyphus agent 留给 Phase 4 API 层用于 free-form steering + approval（通过 `toolApproval` + `prepareCall`）。
 

@@ -104,7 +104,6 @@ packages/agents/src/
 ├── sisyphus/
 │   ├── agent.ts             # ToolLoopAgent 构造工厂（拉 tools/skills/config）
 │   ├── workflow.ts          # plain async — tournamentWorkflow 主循环（编排子 workflow、收敛检测）
-│   ├── logic.ts             # 纯函数（updateHypothesesWithEval / computeLeader / shouldStop* / applyOraclePruning）
 │   └── snapshot.ts          # snapshotStep + RoundSnapshot（写 FS snapshot.json）
 ├── librarian/
 │   ├── agent.ts
@@ -117,8 +116,7 @@ packages/agents/src/
 │   └── workflow.ts          # plain async — bash-tool 跑 Python、F1 计算
 ├── oracle/
 │   ├── agent.ts
-│   ├── workflow.ts          # plain async — 批判、突变、反例 debug
-│   └── logic.ts             # 纯函数（buildHypothesesBlock / buildEvalSummaryBlock）
+│   └── workflow.ts          # plain async — 批判、突变、反例 debug（纯函数 buildHypothesesBlock / buildEvalSummaryBlock 已内联）
 ├── prometheus/
 │   ├── agent.ts
 │   └── workflow.ts          # plain async — 规划、MHD cfg 生成
@@ -369,7 +367,8 @@ export async function tournamentWorkflow(input: TournamentWorkflowInput) {
       emitChunk: input.emitChunk,
     })
 
-    // 人机协同节点（TODO Phase 4：通过 Sisyphus agent + toolApproval 接入）
+    // 人机协同节点（未实现 — Phase 4 P1：通过 Sisyphus agent + toolApproval 接入，
+    // ToolLoopAgent 构造时设 toolApproval 或 prepareCall 返回 'user-approval' 暂停流）
     // const review = await reviewLeadingHypothesis({leadingHypoId, critiques, projectId})
 
     // Prometheus 规划下一轮
@@ -820,7 +819,7 @@ packages/config → packages/storage (读 credentials + settings)
 
 - 每 role 两文件：`agent.ts`（构造工厂，`new ToolLoopAgent`）+ `workflow.ts`（plain async，`await agent.stream({messages})` + `streamAgentOutput` + `return result.output`）
 - `runtimeContext` 是 ToolLoopAgent **构造参数**（不是 `agent.stream()` 调用选项）
-- `agent.stream()` 返回 `Promise<StreamTextResult>`，**必须 await**（与 WorkflowAgent 同步返回不同）
+- `agent.stream()` 返回 `Promise<StreamTextResult>`，**必须 await**
 - SSE 流通过 `emitChunk` 回调从子 workflow 逐层冒泡到 `RunRegistry`——tournamentWorkflow 接受 `emitChunk?: EmitChunk`，转发给每个子 workflow
 - `toolApproval`（人机协同审批）在 ToolLoopAgent 构造时或 `prepareCall` 返回值里设置，返回 `'user-approval'` 暂停流 emit `tool-approval-request` chunk
 - **源码内部相对 import 用 `.ts` 后缀**（不是 `.js`）：tsx + Node type stripping 不做 `.js`→`.ts` fallback
