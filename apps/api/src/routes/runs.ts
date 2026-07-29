@@ -12,6 +12,8 @@ import {
   createRun,
   getProject,
   getRun as getStorageRun,
+  getRunChunks,
+  listRuns,
   updateRunStatus,
 } from '@open-scientist/storage'
 import { Hono } from 'hono'
@@ -197,6 +199,41 @@ runs.get('/api/projects/:name/runs/:runId', async (c) => {
     currentRound: row.currentRound,
     bestF1: row.bestF1,
   })
+})
+
+/**
+ * GET /api/projects/:name/runs/:runId/chunks — fetch all persisted chunks for a run.
+ *
+ * Returns an array of `{ seq, chunk }` objects (chunk = parsed UIMessageChunk).
+ * Used by the frontend to restore message history after page refresh.
+ */
+runs.get('/api/projects/:name/runs/:runId/chunks', async (c) => {
+  const projectName = c.req.param('name')
+  const runId = c.req.param('runId')
+  const rows = await getRunChunks(projectName, runId)
+  return c.json(rows.map((r) => ({ seq: r.seq, chunk: JSON.parse(r.chunkJson) as unknown })))
+})
+
+/**
+ * GET /api/projects/:name/runs — list all runs for a project.
+ */
+runs.get('/api/projects/:name/runs', async (c) => {
+  const projectName = c.req.param('name')
+  const rows = await listRuns(projectName)
+  return c.json(
+    rows
+      .slice()
+      .reverse()
+      .map((r) => ({
+        runId: r.id,
+        projectId: r.projectId,
+        status: r.status,
+        startedAt: r.startedAt,
+        endedAt: r.endedAt,
+        currentRound: r.currentRound,
+        bestF1: r.bestF1,
+      })),
+  )
 })
 
 /**

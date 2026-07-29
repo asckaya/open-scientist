@@ -21,7 +21,7 @@ describe('config paths', () => {
 
   it('resolves workspace dir with runId + hypoId', () => {
     const p = getWorkspaceDir('proj', 'run-1', 'hypo-1')
-    expect(p).toContain('projects/proj/runs/run-1/workspace/hypo-1')
+    expect(p).toContain('projects/proj/runs/run-1/hypo-1')
   })
 
   it('resolves global db path', () => {

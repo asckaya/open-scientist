@@ -11,8 +11,7 @@ import { makeSubmitResultTool } from '../shared/tool-output.ts'
 
 export interface SisyphusAgentDeps {
   /**
-   * Project name — required for MCP trust gating even though Sisyphus has no
-   * bash tool. MCP servers are connected per-project.
+   * Project name — used to scope MCP server connections per-project.
    */
   projectId: string
   /**
@@ -173,6 +172,8 @@ export async function createSisyphusAgent({
     instructions:
       instructions ??
       `你是 Sisyphus，太阳物理多智能体系统的编排器 agent，负责调查日冕加热之谜。
+
+**所有输出（自然语言字段）必须用中文撰写。** 只有工具名、JSON key 保持英文。
 
 你的角色：协调锦标赛进化工作流，调用 5 个专家子 agent：
 - Librarian：知识检索 + 假设生成（将假设翻译为 Python 物理过滤函数）

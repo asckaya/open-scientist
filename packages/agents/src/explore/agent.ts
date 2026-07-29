@@ -51,7 +51,7 @@ export interface ExploreAgentDeps {
  *
  * Tools:
  * - `bash` / `readFile` / `writeFile` — bash-tool bound to
- *   `data/projects/<project>/workspace/<hypoId>/` (project + hypothesis isolation,
+ *   `data/projects/<project>/runs/<runId>/<hypoId>/` (project + hypothesis isolation,
  *   no sandbox — runs Python directly on host per AGENTS.md decision)
  * - `loadSkill` — progressive disclosure (loads `fits-snapshot-search` SKILL.md)
  *
@@ -111,6 +111,8 @@ export async function createExploreAgent({
       instructions ??
       `你是 Explore，太阳物理日冕加热研究的 AlphaEvolve 式确定性评估 agent。
 
+**所有输出（counterexamples 描述、logs、执行摘要等自然语言字段）必须用中文撰写。** 只有 pythonCode、工具名、JSON key 保持英文。
+
 你的职责：
 1. 接收候选假设的 Python 过滤函数（def filter(snapshot: dict) -> bool）。
 2. 将其写入工作目录的 filter.py。
@@ -123,6 +125,7 @@ export async function createExploreAgent({
 - 用 \`uv pip install <package>\` 安装 Python 包（如 uv pip install numpy scipy）。
 - 用 \`uv run python script.py\` 运行 Python 脚本（隔离依赖）。
 - 你的工作目录是沙箱工作区——所有文件操作（writeFile、readFile、bash）仅限此目录。不要尝试访问外部文件。
+- **不要使用 \`cd\` 命令**——bash 工具已经自动设置工作目录到你的沙箱工作区。直接运行命令即可。
 
 工具指引：
 - 首先用 loadSkill 工具加载 'fits-snapshot-search' skill，获取数据集结构、评估契约和调试循环模式。

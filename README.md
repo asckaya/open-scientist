@@ -20,7 +20,7 @@ packages/
   agents/     — 6 ToolLoopAgent（sisyphus/librarian/looker/explore/oracle/prometheus）
   tools/      — bash/helix-query/fits-align/mhd-config/load-skill
   skills/     — discover + prompt + load-tool（agentskills.io 开放格式）
-  mcp/        — MCP server registry + trust + 漂移检测
+  mcp/        — MCP server registry + 自动信任
   storage/    — 双 SQLite（global + per-project）+ Drizzle + 8 repo
   helix/      — HelixDB client + queries DSL
   schema/     — Zod schemas（零业务依赖）

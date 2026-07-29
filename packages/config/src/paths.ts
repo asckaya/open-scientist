@@ -30,7 +30,7 @@ export function getProjectDir(name: string): string {
 }
 
 export function getWorkspaceDir(project: string, runId: string, hypoId: string): string {
-  return resolve(getProjectDir(project), 'runs', runId, 'workspace', hypoId)
+  return resolve(getProjectDir(project), 'runs', runId, hypoId)
 }
 
 export function getMhdDir(project: string): string {

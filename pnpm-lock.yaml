@@ -250,6 +250,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -300,24 +303,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(supports-color@10.2.2)(zod@4.4.3)
-      '@open-scientist/config':
-        specifier: workspace:*
-        version: link:../config
       '@open-scientist/helix':
         specifier: workspace:*
         version: link:../helix
-      '@open-scientist/logger':
-        specifier: workspace:*
-        version: link:../logger
       '@open-scientist/schema':
         specifier: workspace:*
         version: link:../schema
-      '@open-scientist/storage':
-        specifier: workspace:*
-        version: link:../storage
-      ai:
-        specifier: ^7.0.31
-        version: 7.0.31(zod@4.4.3)
       zod:
         specifier: ^4.4.3
         version: 4.4.3

@@ -41,7 +41,7 @@ packages/
   agents        — 6 ToolLoopAgent（sisyphus/librarian/looker/explore/oracle/prometheus）
   tools         — bash/helix-query/fits-align/mhd-config/load-skill
   skills        — discover + prompt + load-tool（agentskills.io 开放格式）
-  mcp           — MCP server registry + trust + 漂移检测
+  mcp           — MCP server registry + 自动信任
   storage       — 双 SQLite（global + per-project）+ Drizzle + 8 repo
   helix         — HelixDB client + queries DSL
   schema        — Zod schemas（零业务依赖）+ Credential/CredentialRecord/CredentialStore 接口（避免 config→storage 循环依赖）
@@ -82,8 +82,6 @@ packages/
 - `output: Output.object({ schema: ZodSchema })`（从 `ai` 导入 `Output`），**不是** 裸 Zod schema
 - `tool({ description, inputSchema: z.object(), outputSchema?, execute, needsApproval? })` — AI SDK 7 把 tool-level `needsApproval` **deprecated**，推荐 `ToolLoopAgent` 构造时或 `prepareCall` 返回值里的 `toolApproval`（`ToolApprovalConfiguration`：per-tool map 或 `GenericToolApprovalFunction`）。返回 `'user-approval'` → stream 暂停并 emit `tool-approval-request` chunk。
 - `createMCPClient(config): Promise<MCPClient>` — async，需 await；`client.tools(): Promise<McpToolSet>` 也 async
-- `fingerprintTools(tools: ToolSet): Promise<Record<string,string>>` — async，需 await
-- `detectToolDrift(current, baseline): {added: string[], removed: string[], changed: string[]}` — 同步
 - `createBashTool(options?): Promise<BashToolkit>` — async，options 用 `destination`（非 `cwd`）作 working dir
 - `MCPTransportConfig`（`@ai-sdk/mcp`）只有 'http'|'sse'；stdio 需用 `StdioClientTransport`（`@modelcontextprotocol/sdk/client/stdio.js`）构造 `MCPTransport` 对象传入
 - TS2883 "inferred type cannot be named" → package.json 加 `@ai-sdk/provider-utils` + `@ai-sdk/provider` 依赖
@@ -109,7 +107,7 @@ packages/
 
 双 SQLite：
 
-- `data/global.sqlite` — credentials / settings / mcp_trust / mcp_tool_baselines
+- `data/global.sqlite` — credentials / settings
 - `data/projects/<name>/db.sqlite` — projects / runs / messages / steering_messages / hypotheses / evidence / critiques / mutations / plans / logs
 
 FS 产物在 `data/projects/<name>/` 下：runs/ / rounds/ / hypotheses/ / evidence/ / mhd/ / workspace/ / skills/ / mcp/ / prompts/ / logs/。
@@ -160,7 +158,7 @@ Prometheus 末轮调 `mhdConfigTool` 时传入 `observationProposal` markdown �
 ## 安全约束
 
 - `bash-tool` 无沙箱（host child_process），靠 project name 隔离 working dir
-- MCP server 是远程代码执行，per-project 加载需信任（`mcp_trust` 表 + `fingerprintTools` 漂移检测）
+- MCP server 是远程代码执行，per-project 自动信任（无 trust gate）
 - env 不进 git（`.gitignore` 配 `.env`）
 - HelixDB strict mode
 

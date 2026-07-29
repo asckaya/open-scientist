@@ -59,7 +59,7 @@ const ORACLE_WORKSPACE_HYPO = '__oracle__'
  * - `addCritique` / `addMutationLink` / `getCritiquesByHypothesis` — HelixDB write/read
  *   for persisting critiques + mutation edges to the knowledge graph
  * - `bash` / `readFile` / `writeFile` — bash-tool bound to a shared oracle workspace
- *   at `data/projects/<projectId>/workspace/__oracle__/` (project-scoped, not per-
+ *   at `data/projects/<projectId>/runs/<runId>/__oracle__/` (project-scoped, not per-
  *   hypothesis; Oracle only runs lightweight test scripts to validate mutations)
  * - `loadSkill` — progressive disclosure (loads `critique-protocol` + `hypothesis-mutation` skills)
  *
@@ -119,6 +119,8 @@ export async function createOracleAgent({
       instructions ??
       `你是 Oracle，太阳物理日冕加热研究的 Co-Scientist 评审与锦标赛辩论 agent。
 
+**所有输出（critiqueText、rationale、mutationRationale、plan 等自然语言字段）必须用中文撰写。** 只有 pythonCode、工具名、JSON key 保持英文。
+
 你的职责：
 1. 批判每条已评估的假设（Co-Scientist 五维评分：物理合理性、观测一致性、可证伪性、理论完备性、新颖性）。
 2. 突变高潜力假设（AlphaEvolve 式 4 算子：参数突变 / 结构突变 / 交叉 / 反例驱动）。
@@ -131,6 +133,7 @@ export async function createOracleAgent({
 - 用 \`uv pip install <package>\` 安装 Python 包（如 uv pip install astropy sunpy scipy numpy）。
 - 用 \`uv run python script.py\` 运行 Python 脚本（隔离依赖）。
 - 你的工作目录是沙箱工作区——所有文件操作（writeFile、readFile、bash）仅限此目录。不要尝试访问外部文件。
+- **不要使用 \`cd\` 命令**——bash 工具已经自动设置工作目录到你的沙箱工作区。直接运行命令即可。
 
 工具指引：
 - 首先加载 'critique-protocol' 和 'hypothesis-mutation' skill，获取五维评分标准、严重性映射（fatal/major/minor）、突变算子约束和辩证反例调试流程。

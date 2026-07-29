@@ -78,3 +78,10 @@ export const plans = sqliteTable('plans', {
   proposalPath: text('proposal_path'),
   createdAt: text('created_at').notNull(),
 })
+
+export const runChunks = sqliteTable('run_chunks', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  runId: text('run_id').notNull(),
+  seq: integer('seq').notNull(),
+  chunkJson: text('chunk_json').notNull(),
+})

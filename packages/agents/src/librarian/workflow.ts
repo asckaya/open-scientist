@@ -67,7 +67,7 @@ export async function librarianWorkflow(input: LibrarianWorkflowInput): Promise<
 3. 给出可证伪条件（预言失效的场景）。
 4. 写纯 Python filter(snapshot: dict) -> bool 函数，阈值从物理推导。
 
-先加载 'solar-physics-rag' skill 获取检索指引和 Python filter 模板。用 searchPapers 和 searchHypotheses 检索已有文献和假设，避免重复。用 addHypothesis 将每条假设持久化到 HelixDB（roundId=0, f1Score=0, runId=${input.runId}, createdAt=now ISO 8601），用 writeFile 将 Python filter 写入工作区。
+先加载 'solar-physics-rag' skill 获取检索指引和 Python filter 模板。用 searchPapers 和 searchHypotheses 检索已有文献和假设，避免重复。用 addHypothesis 将每条假设持久化到 HelixDB（roundId=1, f1Score=0, runId=${input.runId}, createdAt=now ISO 8601），用 writeFile 将 Python filter 写入工作区。
 
 返回 HypothesisPool，rationale 说明覆盖策略。`
 

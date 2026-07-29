@@ -5,7 +5,7 @@ import {
   setGlobalSettings,
   setProjectSettings,
 } from '@open-scientist/config'
-import { MCP_PRESETS, trustServer } from '@open-scientist/mcp'
+import { MCP_PRESETS } from '@open-scientist/mcp'
 import {
   type AgentConfig,
   AgentConfigSchema,
@@ -165,24 +165,6 @@ settings.get('/api/projects/:project/settings', async (c) => {
 
 settings.get('/api/settings/mcp-presets', (c) => {
   return c.json(MCP_PRESETS)
-})
-
-// ─── MCP trust ───────────────────────────────────────────────────────────────
-//
-// Mark an MCP server as trusted for a project. The fingerprint must match what
-// getMcpTools computed (from fingerprintTools). After this call, getMcpTools
-// will return the real tools instead of an empty toolset.
-
-settings.post('/api/projects/:project/mcp-trust/:serverName', async (c) => {
-  const project = c.req.param('project')
-  const serverName = c.req.param('serverName')
-  const body = await c.req.json()
-  const fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : undefined
-  if (!fingerprint) {
-    return c.json({ error: 'bad_request', message: 'fingerprint (string) is required' }, 400)
-  }
-  await trustServer(project, serverName, fingerprint)
-  return c.json({ ok: true })
 })
 
 settings.patch('/api/projects/:project/settings', async (c) => {

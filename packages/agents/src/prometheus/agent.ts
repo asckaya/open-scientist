@@ -59,7 +59,7 @@ const PROMETHEUS_WORKSPACE = 'prometheus'
  *   file under `data/projects/<projectId>/mhd/<runId>.cfg` + returns MhdConfig
  *   (cfgPath / proposalPath / summary). Called only on the final round.
  * - `bash` / `readFile` / `writeFile` — bash-tool bound to a SHARED prometheus
- *   workspace (`data/projects/<projectId>/workspace/prometheus/`). No sandbox —
+ *   workspace (`data/projects/<projectId>/runs/<runId>/prometheus/`). No sandbox —
  *   runs on host per AGENTS.md decision. Shared across rounds of one run.
  * - `loadSkill` — progressive disclosure (loads `mhd-config-gen` SKILL.md)
  *
@@ -118,6 +118,8 @@ export async function createPrometheusAgent({
       instructions ??
       `你是 Prometheus，太阳物理日冕加热研究的多轮规划 agent（Scaling Test-time Compute）。
 
+**所有输出（plan、observationProposal、rationale 等自然语言字段）必须用中文撰写。** 只有 MHD cfg 参数名、工具名、JSON key 保持英文。
+
 你的职责：
 1. 根据当前假设分数分布和用户（人在回路）物理直觉，动态调整下一轮突变搜索的物理参数范围。
 2. 分配计算预算（maxEvals、parallelWorkers）。
@@ -130,6 +132,7 @@ export async function createPrometheusAgent({
 - 用 \`uv pip install <package>\` 安装 Python 包（如 uv pip install astropy sunpy scipy numpy）。
 - 用 \`uv run python script.py\` 运行 Python 脚本（隔离依赖）。
 - 你的工作目录是沙箱工作区——所有文件操作（writeFile、readFile、bash）仅限此目录。不要尝试访问外部文件。
+- **不要使用 \`cd\` 命令**——bash 工具已经自动设置工作目录到你的沙箱工作区。直接运行命令即可。
 
 工具指引：
 - 加载 'mhd-config-gen' skill 获取 MHD 配置生成指引——在末轮（或收敛时）首先加载。skill 涵盖 .cfg 字段布局、从获胜 filter 阈值推导参数、观测建议书格式、推荐的卫星/仪器表（SDO/AIA、SDO/HMI、Hinode/XRT、IRIS、Parker Solar Probe、Solar Orbiter）。

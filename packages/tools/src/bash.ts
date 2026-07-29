@@ -242,7 +242,7 @@ export function resolveWithinWorkspace(cwd: string, userPath: string): string {
  *
  * Uses `node:child_process` spawn (real host shell) — supports Python,
  * Node.js, and any system binary. Files persist to disk under
- * `data/projects/<project>/runs/<runId>/workspace/<hypoId>/`.
+ * `data/projects/<project>/runs/<runId>/<hypoId>/`.
  *
  * Features borrowed from pi (github.com/earendil-works/pi):
  * - spawn-based streaming output (not exec buffering)

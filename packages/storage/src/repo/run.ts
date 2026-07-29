@@ -48,6 +48,11 @@ export async function getRun(projectName: string, runId: string) {
   return db.select().from(runs).where(eq(runs.id, runId)).all()[0] ?? null
 }
 
+export async function listRuns(projectName: string) {
+  const { db } = createProjectDb(projectName)
+  return db.select().from(runs).orderBy(runs.startedAt).all()
+}
+
 export async function updateRunStatus(projectName: string, runId: string, status: RunStatus) {
   const { db } = createProjectDb(projectName)
   db.update(runs)

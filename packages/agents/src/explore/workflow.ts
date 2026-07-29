@@ -1,5 +1,6 @@
 import { type AgentRuntimeConfig, getDatasetDir, type ModelArg } from '@open-scientist/config'
 import type { EvalResult } from '@open-scientist/schema'
+import type { UIMessageChunk } from 'ai'
 import { type EmitChunk } from '../shared/stream.ts'
 import { resolveAgentConfigArgs, runAgentWorkflow } from '../shared/run-workflow.ts'
 import { createExploreAgent } from './agent.ts'
@@ -90,6 +91,19 @@ ${input.hypothesis.pythonCode}
 4. 读取 JSON 输出（F1、TP/FP/FN、反例）。如果 F1 低，调试反例，修改 filter.py，重新运行。
 5. 共享 venv（含 numpy/scipy）在 ${datasetDir}/.venv。如需额外包：uv pip install --python ${datasetDir}/.venv/bin/python <package>
 6. 返回 EvalResult，含 hypoId=${input.hypoId}、f1、truePositives、falsePositives、falseNegatives、counterexamples[]（物理具体）、logs（命令 + 关键 stdout）、executionMs。`
+
+  // Emit phase-start right before streaming begins (not in the .map() caller)
+  // so each hypothesis's phase-start fires when that workflow is actually ready,
+  // not all at once before any Explore agent starts.
+  if (input.emitChunk) {
+    input.emitChunk({
+      type: 'custom',
+      kind: 'tournament.phase-start',
+      role: 'explore',
+      round: input.round,
+      hypoId: input.hypoId,
+    } as unknown as UIMessageChunk)
+  }
 
   return runAgentWorkflow<EvalResult>({
     agent,

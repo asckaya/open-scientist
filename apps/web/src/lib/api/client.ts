@@ -307,6 +307,30 @@ export async function getRunStatus(
   )
 }
 
+export async function listRuns(
+  project: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<RunStatusResponse[]> {
+  return jsonOrThrow(await fetchFn(`/api/projects/${encodeURIComponent(project)}/runs`))
+}
+
+export interface RunChunkEntry {
+  seq: number
+  chunk: unknown
+}
+
+export async function getRunChunks(
+  project: string,
+  runId: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<RunChunkEntry[]> {
+  return jsonOrThrow(
+    await fetchFn(
+      `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/chunks`,
+    ),
+  )
+}
+
 export async function stopRun(
   project: string,
   runId: string,
@@ -347,6 +371,8 @@ export const api = {
   startRun,
   reconnectRunStream,
   getRunStatus,
+  listRuns,
+  getRunChunks,
   stopRun,
 }
 

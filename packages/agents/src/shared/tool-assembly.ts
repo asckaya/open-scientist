@@ -112,9 +112,7 @@ export async function assembleDefaultTools({
  * overwrites (preserving prior `Object.assign` behaviour), but the collision
  * is now visible instead of silent.
  *
- * `projectName` is required for the trust gate: `getMcpTools` checks the
- * per-project trust state before returning tools, returning an empty toolset
- * for untrusted servers.
+ * `projectName` scopes MCP server connections per-project.
  *
  * Exported so Sisyphus (which bypasses `assembleDefaultTools` but still needs
  * MCP merge) can reuse the same collision-aware merge.

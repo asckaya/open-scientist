@@ -1,5 +1,6 @@
 import { tournamentWorkflow } from '@open-scientist/agents'
 import type { TournamentWorkflowInput, TournamentResult } from '@open-scientist/agents'
+import { appendRunChunk } from '@open-scientist/storage'
 import type { UIMessageChunk } from 'ai'
 
 /**
@@ -113,9 +114,13 @@ export class RunRegistryImpl implements RunRegistry {
     // in real time (not just replay the buffer at connect time). When the run
     // settles, every controller is closed and the set is cleared.
     const activeControllers = new Set<ReadableStreamDefaultController<UIMessageChunk>>()
+    let chunkSeq = 0
 
     const emit = (chunk: UIMessageChunk) => {
       chunks.push(chunk)
+      const seq = chunkSeq++
+      // Persist to SQLite (fire-and-forget — doesn't block the live stream)
+      void appendRunChunk(input.projectId, input.runId, seq, JSON.stringify(chunk)).catch(() => {})
       for (const controller of activeControllers) {
         try {
           controller.enqueue(chunk)

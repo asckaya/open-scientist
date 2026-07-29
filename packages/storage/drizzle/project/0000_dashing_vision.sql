@@ -64,6 +64,13 @@ CREATE TABLE `projects` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `projects_name_unique` ON `projects` (`name`);--> statement-breakpoint
+CREATE TABLE `run_chunks` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`run_id` text NOT NULL,
+	`seq` integer NOT NULL,
+	`chunk_json` text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `runs` (
 	`id` text PRIMARY KEY NOT NULL,
 	`project_id` text NOT NULL,

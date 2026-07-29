@@ -207,6 +207,44 @@ export async function tournamentWorkflow(
     }
   }
 
+  // Emit a phase-start marker so the frontend can tag messages with (round, hypoId)
+  // for the round-hypothesis selector. `hypoId` is undefined for non-hypothesis-specific
+  // phases (Librarian, Oracle, Prometheus). For Explore, call once per hypothesis.
+  const emitPhaseStart = (role: string, round: number, hypoId?: string) => {
+    if (emitChunk) {
+      emitChunk({
+        type: 'custom',
+        kind: 'tournament.phase-start',
+        role,
+        round,
+        hypoId: hypoId ?? null,
+      } as unknown as UIMessageChunk)
+    }
+  }
+
+  // Helper: emit a round-update custom chunk with the current hypothesis pool
+  // + convergence history so the frontend can render the evolution tree and
+  // concept net from real data (not mock defaults).
+  const emitRoundUpdate = (round: number, hypos: Hypothesis[], convergence: ConvergenceEntry[]) => {
+    if (emitChunk) {
+      emitChunk({
+        type: 'custom',
+        kind: 'tournament.round-update',
+        round,
+        hypotheses: hypos.map((h) => ({
+          id: h.id,
+          statement: h.statement,
+          parentId: h.parentId,
+          round: h.round,
+          f1: h.f1,
+          status: h.status,
+          createdAt: h.createdAt,
+        })),
+        convergenceHistory: convergence,
+      } as unknown as UIMessageChunk)
+    }
+  }
+
   // ─── Round 1: Librarian generates the hypothesis pool (or resume from snapshot) ───
   //
   // When `resumeFrom` is provided (dev-mode crash recovery), skip Round 1 and
@@ -236,6 +274,7 @@ export async function tournamentWorkflow(
     leadingHypoId = resumeFrom.leadingHypoId
     convergenceHistory = [...resumeFrom.convergenceHistory]
   } else {
+    emitPhaseStart('librarian', 1)
     emitAgentState('librarian', 'thinking')
     const hypoPool = await librarianWorkflow({
       seed,
@@ -251,18 +290,21 @@ export async function tournamentWorkflow(
     bestF1 = 0
     leadingHypoId = null
     convergenceHistory = []
+    // Emit initial hypotheses from Librarian (Round 1)
+    emitRoundUpdate(1, hypotheses, convergenceHistory)
   }
 
   // Final-round outputs (filled by Prometheus when the tournament converges).
   let mhdConfigPath: string | null = null
   let proposalPath: string | null = null
-  let totalRounds = resumeFrom ? resumeFrom.round : 1
+  let totalRounds = resumeFrom ? resumeFrom.round : 0
 
-  // ─── Rounds (resumeFrom.round + 1)..MAX_ROUNDS: Explore → Oracle → Prometheus loop ───
+  // ─── Rounds 1..MAX_ROUNDS: Librarian (Round 1) → Explore → Oracle → Prometheus loop ───
   //
-  // When resuming, start at resumeFrom.round + 1 (the snapshot's round already
-  // completed). When fresh, start at 2 (Round 1 was Librarian).
-  const startRound = resumeFrom ? resumeFrom.round + 1 : 2
+  // Librarian runs once before the loop (Round 1, generating the initial pool).
+  // The loop starts at Round 1 so Explore/Oracle/Prometheus share the same round
+  // number as Librarian's initial pool. When resuming, skip completed rounds.
+  const startRound = resumeFrom ? resumeFrom.round + 1 : 1
   for (let round = startRound; round <= MAX_ROUNDS; round++) {
     totalRounds = round
 
@@ -301,6 +343,9 @@ export async function tournamentWorkflow(
 
     convergenceHistory.push({ round, bestF1, count: hypotheses.length })
 
+    // Emit evaluated hypotheses with F1 scores (visualizer can show the tree)
+    emitRoundUpdate(round, hypotheses, convergenceHistory)
+
     // ── Persist round snapshot ──
     await snapshotStep({
       round,
@@ -327,6 +372,7 @@ export async function tournamentWorkflow(
     }
 
     // ── Oracle: critique + mutate + eliminate ──
+    emitPhaseStart('oracle', round)
     emitAgentState('oracle', 'thinking')
     const oracleOutput = await oracleWorkflow({
       projectId,
@@ -345,6 +391,9 @@ export async function tournamentWorkflow(
     hypotheses = hypotheses
       .filter((h) => !oracleOutput.eliminatedIds.includes(h.id))
       .concat(oracleOutput.mutations.map((m) => m.mutatedHypothesis))
+
+    // Emit mutated/eliminated hypothesis pool (visualizer shows new branches)
+    emitRoundUpdate(round, hypotheses, convergenceHistory)
 
     // Oracle may declare a winner early (clear convergence this round).
     if (oracleOutput.winningHypoId) {
@@ -383,6 +432,7 @@ export async function tournamentWorkflow(
     }
 
     // ── Prometheus: plan next round ──
+    emitPhaseStart('prometheus', round)
     emitAgentState('prometheus', 'thinking')
     const prometheusOutput = await prometheusWorkflow({
       projectId,
@@ -406,6 +456,7 @@ export async function tournamentWorkflow(
   }
 
   // ─── Final round: Prometheus generates MHD cfg + observation proposal ───
+  emitPhaseStart('prometheus', totalRounds)
   emitAgentState('prometheus', 'thinking')
   const winningStatement =
     leadingHypoId !== null ? (hypotheses.find((h) => h.id === leadingHypoId)?.statement ?? '') : ''
@@ -429,6 +480,14 @@ export async function tournamentWorkflow(
   if (finalPrometheus.mhdConfig) {
     mhdConfigPath = finalPrometheus.mhdConfig.cfgPath
     proposalPath = finalPrometheus.mhdConfig.proposalPath
+  }
+
+  // Emit final round-update with winner status
+  if (leadingHypoId !== null) {
+    hypotheses = hypotheses.map((h) =>
+      h.id === leadingHypoId ? { ...h, status: 'winner' as const } : h,
+    )
+    emitRoundUpdate(totalRounds, hypotheses, convergenceHistory)
   }
 
   return {
