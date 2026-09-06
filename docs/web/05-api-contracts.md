@@ -1,10 +1,12 @@
 # API 契约（前后端）— 基于实际代码
 
-> 本文档基于 `apps/api/src/routes/` 实际实现。所有字段名、状态码、行为均与代码一一对应。前端 agent 以本文档为唯一权威。
+> 本文档基于 `apps/api/src/routes/` 实际实现（非设计期）。所有字段名、状态码、行为均与代码一一对应。前端 agent 以本文档为唯一权威。
+>
+> **实现版本**：Phase 4 末（VM 修复 + type stripping 之后）。`tournamentWorkflow` 已能跑通 librarian 首轮；looker/explore/oracle/prometheus 链路代码就绪但需真实数据集 + 模型才能端到端验证。
 
 ## 基础
 
-- **Base URL**：`http://localhost:3000`（apps/api，@hono/node-server + tsx）
+- **Base URL**：`http://localhost:3000`（nitro dev，apps/api）
 - **Content-Type**：`application/json`（除 SSE 流式端点为 `text/event-stream`）
 - **错误格式**：`{ "error": "<code>", "message": "<human readable>" }`
 - **路径参数 `:project` / `:name`**：project 名（slug），用于定位 `data/projects/<name>/` 目录 + SQLite。
@@ -398,26 +400,6 @@ Project 是逻辑隔离单位，每个 project 有独立 SQLite + FS 产物目�
 
 > 注：此端点 `thinkingLevel` 强制为 `'off'`，纯连通性测试。
 
-### `POST /api/test-llm/credential/:id`
-
-用已存凭证测试 LLM 连通性（前端无需传 apiKey/provider/baseURL，后端从加密存储取）。
-
-**路径参数**：`:id` = credential id
-
-**Request body**：`TestLlmByCredentialRequest`
-
-```ts
-{
-  model: string,                        // 必填
-  prompt: string,                       // 默认 'Say hi in 3 words.'
-  maxTokens: number,                    // 1-4096，默认 50
-}
-```
-
-**Response**：同 `POST /api/test-llm`（`TestLlmResponse`）
-
-> `provider` / `baseURL` / `apiKey` 全部从 credential 存储读取，`thinkingLevel` 强制 `'off'`，`apiMode` 强制 `'chat'`。
-
 ---
 
 ## 6. Runs（Tournament Workflow）
@@ -520,6 +502,64 @@ Headers:
 **Response 200**：`{ "ok": true, "runId": string, "status": "stopped' }`
 **Response 404**：同上
 
+### Human-in-the-loop 控制（可选交互面）
+
+> 设计不变量：科学闭环**不依赖人工参与**——默认 `humanGate: 'off'` 时，以下端点一个都不调用，
+> 循环也会自主完成（`workflowClosure=complete`）。人工参与只通过这些端点**选择性介入**：
+> 暂停/转向/审批。三者都**不能**写入证据、改写支持/淘汰门禁裁决或假设状态；
+> 审批只决定"是否继续下一轮"（拒绝 → `terminationReason: 'human_halted_at_plan_review'`，
+> 超时/中止 → fail-open 自动继续并留下审计记录）。
+>
+> 启动运行时通过 `POST /runs` 的 `humanGate: 'off' | 'plan_review'` 与
+> `humanGateTimeoutMs?: 1000..3600000` 配置；审批门挂在 D.route 的续轮决策处。
+
+#### `GET /api/projects/:name/runs/:runId/human`
+
+人工控制状态（供 UI 轮询）。
+
+**Response 200**：
+
+```json
+{
+  "runId": "run-...",
+  "gateMode": "plan_review",
+  "paused": false,
+  "pendingGate": { "gateId": "gate-...", "kind": "plan_review", "round": 1, "summary": "..." },
+  "gateDecisions": 0
+}
+```
+
+**Response 404**：run 未激活（已结束或不存在）。
+
+#### `POST /api/projects/:name/runs/:runId/steer`
+
+注入一条转向/追问消息，在下一个 A.generate 入口被消耗。model-assisted 模式将其作为候选生成
+的侧重参考；local-grounded 模式只登记不消费（保持确定性可复现）。
+
+**Request body**：`{ "content": string, "mode": "steering" | "follow-up" }`（mode 默认 steering）
+**Response 200**：`{ "ok": true, "runId": string, "message": { "messageId": string, ... } }`
+**Response 409**：run 已结束；**Response 404**：run 不存在。
+
+#### `POST /api/projects/:name/runs/:runId/pause` / `.../unpause`
+
+在**节点边界**协作式暂停/恢复（不打断正在执行的智能体步骤；`/stop` 仍可随时强制终止）。
+SSE 侧对应 `scientific.human-paused` / `scientific.human-resumed` 事件。
+
+**Response 200**：`{ "ok": true, "runId": string, "paused": boolean }`
+
+#### `POST /api/projects/:name/runs/:runId/approve`
+
+应答待决的 plan_review 审批门。`approved: false` 使循环以
+`terminationReason: 'human_halted_at_plan_review'` 结束（如实记录人工决定，不伪造任何科学裁决）。
+
+**Request body**：`{ "approved": boolean, "reason"?: string, "gateId"?: string }`
+**Response 200**：`{ "ok": true, "runId": string, "decision": { "gateId": string, "approved": boolean, "source": "human", "reason"?: string } }`
+**Response 409**：当前没有待决审批门。
+
+> 相关 SSE 自定义事件：`scientific.steering-injected`、`scientific.human-gate-request`、
+> `scientific.human-gate-result`、`scientific.human-paused`、`scientific.human-resumed`。
+> 运行结果的 `humanSteering` / `humanGates` 数组完整记录本轮实际发生的人工介入（未发生则缺省）。
+
 ---
 
 ## 7. Dev Probe（临时测试端点）
@@ -545,7 +585,7 @@ Headers:
 
 ## 8. SSE 事件类型（UIMessageChunk）
 
-所有 SSE 流端点（`POST /runs`, `GET /runs/:id/stream`, `POST /dev-probe/stream-test`）输出统一的 `UIMessageChunk` 格式（`toUIMessageStream` 转换）。
+所有 SSE 流端点（`POST /runs`, `GET /runs/:id/stream`, `POST /dev-probe/stream-test`）输出统一的 `UIMessageChunk` 格式（来自 `@ai-sdk/workflow` 的 `createModelCallToUIChunkTransform`）。
 
 每个事件格式：`data: <JSON>\n\n`（无 `event:` 字段，全部用 `data`）。流结束发送 `data: [DONE]\n\n`。
 
@@ -704,13 +744,9 @@ POST /api/credentials
 PUT /api/settings/models/default
   { model: 'llab/Qwen3-Next-80B-A3B-Instruct', thinkingLevel: 'medium', credentialId: 'openai-main' }
 
-// 3. 测试 LLM 连通（两种方式）
-//    a) 独立路径，直接传完整 config
+// 3. 测试 LLM 连通（独立路径，直接传完整 config）
 POST /api/test-llm
   { provider: 'openai', model: '...', baseURL: '...', apiKey: '...', prompt: 'hi' }
-//    b) 用已存凭证，无需传 key
-POST /api/test-llm/credential/openai-main
-  { model: '...', prompt: 'hi' }
 
 // 4. 创建 project
 POST /api/projects

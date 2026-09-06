@@ -23,6 +23,7 @@ async function json(res: Response): Promise<any> {
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), 'os-api-routes-'))
   process.env.BASE_DIR = tmp
+  process.env.CREDENTIAL_ENCRYPTION_KEY = 'test-only-encryption-key'
 })
 
 afterEach(() => {
@@ -31,6 +32,7 @@ afterEach(() => {
   // deterministic from the test bodies; closing unknown names is a no-op.
   for (const name of ['my-proj', 'proj-a', 'proj-b', 'exists-proj']) closeProjectDb(name)
   delete process.env.BASE_DIR
+  delete process.env.CREDENTIAL_ENCRYPTION_KEY
   rmSync(tmp, { recursive: true, force: true })
 })
 
@@ -41,6 +43,7 @@ describe('GET /api/health', () => {
     const body = await json(res)
     expect(body.status).toBe('ok')
     expect(body.baseDir).toBe(tmp)
+    expect(body.coronalDatasetId).toBe('coronal-starter-v1')
     expect(typeof body.timestamp).toBe('string')
   })
 })

@@ -2,7 +2,8 @@
  * 后端 REST API 客户端 — 所有 fetch 调用集中于此。
  *
  * 契约来源：apps/api/src/routes/ 实际实现（非设计期 spec）。
- * 基础路径 /api 由 Next.js rewrites 代理到 apps/api，浏览器同源，无需 CORS。
+ * 默认由 Next.js rewrites 代理 `/api`；设置 NEXT_PUBLIC_API_BASE_URL 时，
+ * 所有 REST 与 SSE 请求统一直连该地址，避免历史回放和实时流落到不同后端。
  *
  * 错误处理：后端统一 envelope `{ error: string, message: string }`，
  * 4xx/5xx 抛 ApiError。SSE 流端点返回 Response 供上层自行消费。
@@ -13,9 +14,9 @@ import type {
   CredentialResponse,
   GlobalSettings,
   ModelConfig,
-  TestLlmByCredentialRequest,
   TestLlmRequest,
   TestLlmResponse,
+  PhenomenonInput,
 } from '@open-scientist/schema'
 
 /** 后端统一错误 envelope */
@@ -38,11 +39,18 @@ export class ApiError extends Error {
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
 
 /**
- * SSE streaming endpoints must bypass the Next.js rewrite proxy, which buffers
- * the entire response (breaking live streaming). In dev, point directly to the
- * API server. In prod, a reverse proxy should handle /api/* without buffering.
+ * SSE streaming endpoints may need to bypass a buffering reverse proxy.  The
+ * same base must also be used for REST calls; otherwise a live run can start on
+ * one backend while history/status requests are sent to another.
  */
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? ''
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? '').replace(/\/+$/, '')
+
+export function apiEndpoint(path: string, apiBase: string = API_BASE): string {
+  if (/^https?:\/\//i.test(path)) return path
+  const normalized = path.startsWith('/') ? path : `/${path}`
+  const normalizedBase = apiBase.replace(/\/$/, '')
+  return `${normalizedBase}${normalized}`
+}
 
 async function parseError(res: Response): Promise<ApiError> {
   let body: ApiErrorBody | null = null
@@ -64,7 +72,7 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export async function getGlobalSettings(fetchFn: typeof fetch = fetch): Promise<GlobalSettings> {
-  return jsonOrThrow(await fetchFn('/api/settings'))
+  return jsonOrThrow(await fetchFn(apiEndpoint('/api/settings')))
 }
 
 export async function putGlobalSettings(
@@ -72,7 +80,7 @@ export async function putGlobalSettings(
   fetchFn: typeof fetch = fetch,
 ): Promise<GlobalSettings> {
   return jsonOrThrow(
-    await fetchFn('/api/settings', {
+    await fetchFn(apiEndpoint('/api/settings'), {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
@@ -85,7 +93,7 @@ export async function putGlobalSettings(
 export async function listModelAliases(
   fetchFn: typeof fetch = fetch,
 ): Promise<Record<string, ModelConfig>> {
-  return jsonOrThrow(await fetchFn('/api/settings/model-aliases'))
+  return jsonOrThrow(await fetchFn(apiEndpoint('/api/settings/model-aliases')))
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +115,9 @@ export async function getProjectSettings(
   project: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<ProjectSettings> {
-  return jsonOrThrow(await fetchFn(`/api/projects/${encodeURIComponent(project)}/settings`))
+  return jsonOrThrow(
+    await fetchFn(apiEndpoint(`/api/projects/${encodeURIComponent(project)}/settings`)),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -126,14 +136,14 @@ export interface AddCredentialRequest {
 export async function listCredentials(
   fetchFn: typeof fetch = fetch,
 ): Promise<CredentialResponse[]> {
-  return jsonOrThrow(await fetchFn('/api/credentials'))
+  return jsonOrThrow(await fetchFn(apiEndpoint('/api/credentials')))
 }
 
 export async function addCredential(
   body: AddCredentialRequest,
   fetchFn: typeof fetch = fetch,
 ): Promise<CredentialResponse> {
-  const res = await fetchFn('/api/credentials', {
+  const res = await fetchFn(apiEndpoint('/api/credentials'), {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -147,7 +157,7 @@ export async function deleteCredential(
   fetchFn: typeof fetch = fetch,
 ): Promise<{ ok: true }> {
   return jsonOrThrow(
-    await fetchFn(`/api/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    await fetchFn(apiEndpoint(`/api/credentials/${encodeURIComponent(id)}`), { method: 'DELETE' }),
   )
 }
 
@@ -157,7 +167,8 @@ export async function deleteCredential(
 
 export interface ProjectListItem {
   name: string
-  createdAt: null
+  createdAt: string
+  summary: string | null
 }
 
 export interface ProjectDetail {
@@ -168,14 +179,14 @@ export interface ProjectDetail {
 }
 
 export async function listProjects(fetchFn: typeof fetch = fetch): Promise<ProjectListItem[]> {
-  return jsonOrThrow(await fetchFn('/api/projects'))
+  return jsonOrThrow(await fetchFn(apiEndpoint('/api/projects')))
 }
 
 export async function createProject(
   body: CreateProjectRequest,
   fetchFn: typeof fetch = fetch,
 ): Promise<ProjectDetail> {
-  const res = await fetchFn('/api/projects', {
+  const res = await fetchFn(apiEndpoint('/api/projects'), {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
@@ -188,7 +199,7 @@ export async function getProject(
   name: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<ProjectDetail> {
-  return jsonOrThrow(await fetchFn(`/api/projects/${encodeURIComponent(name)}`))
+  return jsonOrThrow(await fetchFn(apiEndpoint(`/api/projects/${encodeURIComponent(name)}`)))
 }
 
 export async function deleteProject(
@@ -196,7 +207,7 @@ export async function deleteProject(
   fetchFn: typeof fetch = fetch,
 ): Promise<{ ok: true }> {
   return jsonOrThrow(
-    await fetchFn(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    await fetchFn(apiEndpoint(`/api/projects/${encodeURIComponent(name)}`), { method: 'DELETE' }),
   )
 }
 
@@ -209,22 +220,7 @@ export async function testLlm(
   fetchFn: typeof fetch = fetch,
 ): Promise<TestLlmResponse> {
   return jsonOrThrow(
-    await fetchFn('/api/test-llm', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(body),
-    }),
-  )
-}
-
-/** 用已存凭证测试连通性（无需传 apiKey） */
-export async function testLlmByCredential(
-  credentialId: string,
-  body: TestLlmByCredentialRequest,
-  fetchFn: typeof fetch = fetch,
-): Promise<TestLlmResponse> {
-  return jsonOrThrow(
-    await fetchFn(`/api/test-llm/credential/${encodeURIComponent(credentialId)}`, {
+    await fetchFn(apiEndpoint('/api/test-llm'), {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
@@ -255,15 +251,19 @@ export interface RunStatusResponse {
 }
 
 export interface StartRunRequest {
-  seed: string
+  seed?: string
   modelAlias?: string
+  phenomenon?: PhenomenonInput
+  maxRounds?: number
+  executionMode?: 'model-assisted' | 'local-grounded'
 }
 
 /**
  * POST /api/projects/:name/runs
  *
- * 启动 tournament run。返回 SSE 流 Response（Content-Type: text/event-stream），
- * header 携带 x-workflow-run-id。调用方需：
+ * 启动一次运行：携带 phenomenon 时走当前 scientificLoopWorkflow；仅带 seed 时
+ * 走归档的 tournamentWorkflow（legacy 兼容路径）。返回 SSE 流 Response
+ * （Content-Type: text/event-stream），header 携带 x-workflow-run-id。调用方需：
  *   1. 读取 res.headers.get('x-workflow-run-id') 保存 runId
  *   2. 消费 res.body（ReadableStream<Uint8Array>）解析 SSE chunks
  *   3. 流结束发送 [DONE]
@@ -274,11 +274,13 @@ export async function startRun(
   project: string,
   body: StartRunRequest,
   fetchFn: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<{ response: Response; runId: string }> {
-  const res = await fetchFn(`${API_BASE}/api/projects/${encodeURIComponent(project)}/runs`, {
+  const res = await fetchFn(apiEndpoint(`/api/projects/${encodeURIComponent(project)}/runs`), {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
+    signal,
   })
   if (!res.ok) throw await parseError(res)
 
@@ -302,9 +304,13 @@ export async function reconnectRunStream(
   runId: string,
   startIndex: number = 0,
   fetchFn: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<{ response: Response; tailIndex: number | null }> {
   const res = await fetchFn(
-    `${API_BASE}/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/stream?startIndex=${startIndex}`,
+    apiEndpoint(
+      `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/stream?startIndex=${startIndex}`,
+    ),
+    { signal },
   )
   if (!res.ok) throw await parseError(res)
 
@@ -319,7 +325,9 @@ export async function getRunStatus(
   fetchFn: typeof fetch = fetch,
 ): Promise<RunStatusResponse> {
   return jsonOrThrow(
-    await fetchFn(`/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}`),
+    await fetchFn(
+      apiEndpoint(`/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}`),
+    ),
   )
 }
 
@@ -327,7 +335,9 @@ export async function listRuns(
   project: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<RunStatusResponse[]> {
-  return jsonOrThrow(await fetchFn(`/api/projects/${encodeURIComponent(project)}/runs`))
+  return jsonOrThrow(
+    await fetchFn(apiEndpoint(`/api/projects/${encodeURIComponent(project)}/runs`)),
+  )
 }
 
 export interface RunChunkEntry {
@@ -342,7 +352,9 @@ export async function getRunChunks(
 ): Promise<RunChunkEntry[]> {
   return jsonOrThrow(
     await fetchFn(
-      `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/chunks`,
+      apiEndpoint(
+        `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/chunks`,
+      ),
     ),
   )
 }
@@ -354,9 +366,112 @@ export async function stopRun(
 ): Promise<{ ok: true; runId: string; status: 'stopped' }> {
   return jsonOrThrow(
     await fetchFn(
-      `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/stop`,
+      apiEndpoint(
+        `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/stop`,
+      ),
       {
         method: 'POST',
+      },
+    ),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Human-in-the-loop 控制（可选交互面；humanGate=off 的运行不需要这些调用）
+// ---------------------------------------------------------------------------
+
+export interface HumanControlState {
+  runId: string
+  gateMode: 'off' | 'plan_review'
+  paused: boolean
+  pendingGate: { gateId: string; kind: 'plan_review'; round: number; summary: string } | null
+  gateDecisions: number
+}
+
+export async function getRunHumanControl(
+  project: string,
+  runId: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<HumanControlState> {
+  return jsonOrThrow(
+    await fetchFn(
+      apiEndpoint(
+        `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/human`,
+      ),
+    ),
+  )
+}
+
+export async function steerRun(
+  project: string,
+  runId: string,
+  content: string,
+  mode: 'steering' | 'follow-up' = 'steering',
+  fetchFn: typeof fetch = fetch,
+): Promise<{ ok: true; runId: string; message: { messageId: string; content: string } }> {
+  return jsonOrThrow(
+    await fetchFn(
+      apiEndpoint(
+        `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/steer`,
+      ),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content, mode }),
+      },
+    ),
+  )
+}
+
+export async function pauseRun(
+  project: string,
+  runId: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<{ ok: true; runId: string; paused: true }> {
+  return jsonOrThrow(
+    await fetchFn(
+      apiEndpoint(
+        `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/pause`,
+      ),
+      { method: 'POST' },
+    ),
+  )
+}
+
+export async function unpauseRun(
+  project: string,
+  runId: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<{ ok: true; runId: string; paused: false }> {
+  return jsonOrThrow(
+    await fetchFn(
+      apiEndpoint(
+        `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/unpause`,
+      ),
+      { method: 'POST' },
+    ),
+  )
+}
+
+export async function approveRunGate(
+  project: string,
+  runId: string,
+  input: { approved: boolean; reason?: string; gateId?: string },
+  fetchFn: typeof fetch = fetch,
+): Promise<{
+  ok: true
+  runId: string
+  decision: { gateId: string; approved: boolean; source: string; reason?: string }
+}> {
+  return jsonOrThrow(
+    await fetchFn(
+      apiEndpoint(
+        `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(runId)}/approve`,
+      ),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
       },
     ),
   )
@@ -383,7 +498,6 @@ export const api = {
   deleteProject,
   // test llm
   testLlm,
-  testLlmByCredential,
   // runs
   startRun,
   reconnectRunStream,
@@ -391,6 +505,12 @@ export const api = {
   listRuns,
   getRunChunks,
   stopRun,
+  // runs — human-in-the-loop（可选）
+  getRunHumanControl,
+  steerRun,
+  pauseRun,
+  unpauseRun,
+  approveRunGate,
 }
 
 export type Api = typeof api

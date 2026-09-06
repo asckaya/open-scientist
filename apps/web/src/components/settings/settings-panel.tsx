@@ -1,6 +1,7 @@
 'use client'
 
 import type { GlobalSettings, ModelConfig } from '@open-scientist/schema'
+import { scientificAgentIdentity } from '@open-scientist/schema'
 import { Plus, X } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useEffect, useState } from 'react'
@@ -32,7 +33,7 @@ function StatusMsg({ status }: { status: Status }) {
     <motion.span
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className={`font-mono text-[11px] uppercase tracking-[1.2px] ${
+      className={`font-mono text-[12px] uppercase tracking-[1.2px] ${
         status.type === 'success' ? 'text-emerald-400' : 'text-red-400'
       }`}
     >
@@ -107,7 +108,7 @@ function NumberField({
         onChange={(e) => onChange(Number(e.target.value))}
         className="font-mono tabular-nums"
       />
-      <p className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted">{hint}</p>
+      <p className="font-mono text-[11px] uppercase tracking-[1.2px] text-muted">{hint}</p>
     </div>
   )
 }
@@ -147,7 +148,7 @@ export function SettingsPanel() {
         modelAliases: partial.modelAliases ?? data.modelAliases,
       }
       await updateMutation.mutateAsync(merged)
-      setStatus({ type: 'success', msg: 'saved' })
+      setStatus({ type: 'success', msg: '已保存' })
     } catch (err) {
       setStatus({
         type: 'error',
@@ -228,8 +229,8 @@ export function SettingsPanel() {
           {/* Role config cards */}
           {Object.keys(models).length === 0 ? (
             <div className="rounded-sm border border-dashed border-[var(--color-border)] py-16 text-center">
-              <p className="font-mono text-[11px] uppercase tracking-[1.4px] text-muted">
-                No roles configured
+              <p className="font-mono text-[12px] uppercase tracking-[1.4px] text-muted">
+                暂未配置角色
               </p>
               <p className="mt-1 text-xs text-muted">添加第一个角色以开始</p>
             </div>
@@ -243,11 +244,19 @@ export function SettingsPanel() {
                   animate={{ opacity: 1, y: 0 }}
                   className="group relative rounded-sm border border-[var(--color-border)] bg-[var(--color-bg)] p-5 transition-colors hover:border-white/20"
                 >
-                  {/* Role header */}
+                  {/* Role header — document-facing name first, persisted key as the contract */}
                   <div className="mb-4 flex items-center justify-between">
-                    <span className="font-mono text-sm uppercase tracking-[1.6px] text-white">
-                      {role}
-                    </span>
+                    <div className="flex min-w-0 items-baseline gap-2">
+                      <span className="text-sm font-medium text-white">
+                        {(() => {
+                          const identity = scientificAgentIdentity(role)
+                          return identity ? `${identity.codename} · ${identity.displayName}` : role
+                        })()}
+                      </span>
+                      <span className="font-mono text-[11px] uppercase tracking-[1.2px] text-muted">
+                        {role}
+                      </span>
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeRole(role)}
@@ -359,7 +368,7 @@ export function SettingsPanel() {
           <div className="mt-8 border-t border-[var(--color-border)] pt-6">
             <Eyebrow>Model Aliases · read-only</Eyebrow>
             {Object.keys(aliases).length === 0 ? (
-              <p className="mt-3 font-mono text-[11px] uppercase tracking-[1.4px] text-muted">
+              <p className="mt-3 font-mono text-[12px] uppercase tracking-[1.4px] text-muted">
                 None
               </p>
             ) : (
@@ -373,10 +382,10 @@ export function SettingsPanel() {
                       {alias}
                     </span>
                     <span className="truncate font-mono text-xs text-muted">{cfg.model}</span>
-                    <span className="ml-auto rounded-full border border-[var(--color-border)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-muted">
+                    <span className="ml-auto rounded-full border border-[var(--color-border)] px-2 py-0.5 font-mono text-[11px] uppercase tracking-[1px] text-muted">
                       {cfg.thinkingLevel}
                     </span>
-                    <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-muted">
+                    <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 font-mono text-[11px] uppercase tracking-[1px] text-muted">
                       {cfg.apiMode}
                     </span>
                   </div>
@@ -396,7 +405,7 @@ export function SettingsPanel() {
         <SectionShell
           eyebrow="Tournament · Evolution Loop"
           title="锦标赛演化参数"
-          description="控制 Sisyphus 编排的假设演化循环。"
+          description="控制闭环协调智能体编排的假设演化循环。"
           action={
             <Button
               size="sm"
@@ -521,7 +530,7 @@ export function SettingsPanel() {
                   </SelectContent>
                 </Select>
               </FieldGroup>
-              <p className="font-mono text-[10px] uppercase leading-relaxed tracking-[1.2px] text-muted">
+              <p className="font-mono text-[11px] uppercase leading-relaxed tracking-[1.2px] text-muted">
                 one-at-a-time — 仅传给当前活跃 agent · all — 广播给全部
               </p>
             </div>

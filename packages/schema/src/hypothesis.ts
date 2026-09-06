@@ -10,9 +10,34 @@ export const HypothesisStatus = z.enum([
 ])
 export type HypothesisStatus = z.infer<typeof HypothesisStatus>
 
+/**
+ * Optional structured mechanism mix for the natural-language scientific path.
+ * The legacy `mechanism` string remains required so tournament callers keep
+ * their original contract.
+ */
+export const HypothesisMechanismComponentSchema = z.object({
+  mechanism: z.string().min(1),
+  role: z.enum(['dominant', 'secondary', 'coupled', 'unknown']),
+  // OpenAI-compatible tool callers commonly serialize an omitted optional
+  // number as null. Treat that wire representation as "not supplied"; it
+  // must never become a fabricated zero contribution in scientific state.
+  contribution: z
+    .number()
+    .min(0)
+    .max(1)
+    .nullable()
+    .optional()
+    .transform((value) => value ?? undefined),
+})
+
 export const HypothesisSchema = z.object({
   id: z.string(),
   statement: z.string(),
+  mechanism: z.string().min(1),
+  mechanismComposition: z.array(HypothesisMechanismComponentSchema).min(1).max(4).optional(),
+  predictions: z.array(z.string().min(1)).min(1),
+  falsificationConditions: z.array(z.string().min(1)).min(1),
+  sourceIds: z.array(z.string().min(1)),
   pythonCode: z.string(),
   parentId: z.string().nullable(),
   round: z.number(),
@@ -23,7 +48,40 @@ export const HypothesisSchema = z.object({
 export type Hypothesis = z.infer<typeof HypothesisSchema>
 
 export const HypothesisPoolSchema = z.object({
-  hypotheses: z.array(HypothesisSchema),
+  hypotheses: z.array(HypothesisSchema).min(1),
   rationale: z.string(),
 })
 export type HypothesisPool = z.infer<typeof HypothesisPoolSchema>
+
+/**
+ * Scientific phenomenon analysis has its own contract.  In particular it
+ * must not manufacture the legacy tournament `pythonCode`/`f1` fields merely
+ * to satisfy a schema: those fields are not executed by the scientific loop
+ * and made a real model result look like placeholder content.
+ *
+ * The scientific path may return an empty pool when retrieval cannot ground a
+ * candidate.  A-stage will then stop with an explicit correction instead of
+ * inventing a mechanism.
+ */
+export const ScientificHypothesisCandidateSchema = HypothesisSchema.omit({
+  pythonCode: true,
+  f1: true,
+  createdAt: true,
+}).extend({
+  status: z.literal('candidate').default('candidate'),
+  /** Claim population/window; required by the prompt and optional for legacy artifacts. */
+  scope: z.string().min(1).optional(),
+  // Model-facing submit_result tolerance: tool-callers routinely omit
+  // bookkeeping fields even when the scientific payload is complete. Empty
+  // sourceIds still enter state and are flagged by the self-correction I
+  // provenance warning instead of rejecting an otherwise valid submission.
+  sourceIds: z.array(z.string().min(1)).default([]),
+  parentId: z.string().nullable().default(null),
+  round: z.number().default(1),
+})
+
+export const ScientificHypothesisPoolSchema = z.object({
+  hypotheses: z.array(ScientificHypothesisCandidateSchema),
+  rationale: z.string().min(1),
+})
+export type ScientificHypothesisPool = z.infer<typeof ScientificHypothesisPoolSchema>

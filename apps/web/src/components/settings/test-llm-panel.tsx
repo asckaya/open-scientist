@@ -1,10 +1,6 @@
 'use client'
 
-import type {
-  TestLlmByCredentialRequest,
-  TestLlmRequest,
-  TestLlmResponse,
-} from '@open-scientist/schema'
+import type { TestLlmRequest, TestLlmResponse } from '@open-scientist/schema'
 import { CheckCircle2, Clock, XCircle } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useState } from 'react'
@@ -22,7 +18,7 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { ApiError } from '@/lib/api/client'
-import { useCredentials, useTestLlm, useTestLlmByCredential } from '@/lib/hooks/useApi'
+import { useCredentials, useTestLlm } from '@/lib/hooks/useApi'
 
 const PRESET_MODELS = [
   'llab/DeepSeek-V4-Flash-FP8',
@@ -43,7 +39,7 @@ function FieldGroup({ label, children }: { label: string; children: React.ReactN
 function UsageStat({ label, value }: { label: string; value?: number }) {
   return (
     <div className="rounded-sm border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-5 py-4">
-      <p className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted">{label}</p>
+      <p className="font-mono text-[11px] uppercase tracking-[1.2px] text-muted">{label}</p>
       <p className="mt-1.5 font-mono text-2xl tabular-nums text-white">{value ?? '—'}</p>
     </div>
   )
@@ -51,7 +47,6 @@ function UsageStat({ label, value }: { label: string; value?: number }) {
 
 export function TestLlmPanel() {
   const testMutation = useTestLlm()
-  const testByCredMutation = useTestLlmByCredential()
   const credsQuery = useCredentials()
 
   const [provider, setProvider] = useState<'openai' | 'anthropic'>('openai')
@@ -62,25 +57,14 @@ export function TestLlmPanel() {
   const [maxTokens, setMaxTokens] = useState(50)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<TestLlmResponse | null>(null)
-  // 选中已存凭证测试时，apiKey/provider/baseURL 全由后端从存储取，
-  // 前端无需传 key；null 表示手动模式。
-  const [selectedCredId, setSelectedCredId] = useState<string | null>(null)
 
-  const isPending = testMutation.isPending || testByCredMutation.isPending
-
-  // Quick fill from existing credential — 切换到「用凭证测试」模式
+  // Quick fill from existing credential
   const handleSelectCredential = (credId: string) => {
     const cred = credsQuery.data?.find((c) => c.id === credId)
-    if (!cred) return
-    setSelectedCredId(cred.id)
-    setProvider(cred.provider as 'openai' | 'anthropic')
-    if (cred.baseURL) setBaseURL(cred.baseURL)
-  }
-
-  // 退出凭证模式，回到手动输入 key
-  const handleClearCredential = () => {
-    setSelectedCredId(null)
-    setApiKey('')
+    if (cred) {
+      setProvider(cred.provider as 'openai' | 'anthropic')
+      if (cred.baseURL) setBaseURL(cred.baseURL)
+    }
   }
 
   const handleTest = async (e: React.FormEvent) => {
@@ -88,32 +72,7 @@ export function TestLlmPanel() {
     setError(null)
     setResult(null)
 
-    if (!model.trim()) {
-      setError('Model 必填')
-      return
-    }
-
-    // 凭证模式：不传 apiKey，走 /api/test-llm/credential/:id
-    if (selectedCredId) {
-      const body: TestLlmByCredentialRequest = {
-        model: model.trim(),
-        prompt,
-        maxTokens: Number(maxTokens),
-      }
-      try {
-        const res = await testByCredMutation.mutateAsync({
-          credentialId: selectedCredId,
-          body,
-        })
-        setResult(res)
-      } catch (err) {
-        setError(err instanceof ApiError ? err.message : String(err))
-      }
-      return
-    }
-
-    // 手动模式：前端直接传 apiKey
-    if (!apiKey.trim()) {
+    if (!model.trim() || !apiKey.trim()) {
       setError('Model 与 API Key 必填')
       return
     }
@@ -150,33 +109,20 @@ export function TestLlmPanel() {
       {/* Quick credential filler banner */}
       {credsQuery.data && credsQuery.data.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-6 py-3">
-          <span className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted">
-            {selectedCredId ? '使用凭证:' : '快速填充凭证:'}
+          <span className="font-mono text-[11px] uppercase tracking-[1.2px] text-muted">
+            快速填充凭证:
           </span>
           {credsQuery.data.map((c) => (
             <button
               key={c.id}
               type="button"
               onClick={() => handleSelectCredential(c.id)}
-              className={`flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[11px] transition-colors ${
-                selectedCredId === c.id
-                  ? 'border-emerald-400/60 bg-emerald-500/[0.08] text-emerald-300'
-                  : 'border-[var(--color-border)] bg-[var(--color-surface)] text-muted hover:border-white/40 hover:text-white'
-              }`}
+              className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1 font-mono text-[12px] text-muted transition-colors hover:border-white/40 hover:text-white"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
               {c.id}
             </button>
           ))}
-          {selectedCredId && (
-            <button
-              type="button"
-              onClick={handleClearCredential}
-              className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1 font-mono text-[11px] text-muted transition-colors hover:border-red-400/40 hover:text-red-300"
-            >
-              ✕ 取消凭证（回到手动输入 Key）
-            </button>
-          )}
         </div>
       )}
 
@@ -188,7 +134,6 @@ export function TestLlmPanel() {
               <Select
                 value={provider}
                 onValueChange={(v: 'openai' | 'anthropic') => setProvider(v)}
-                disabled={selectedCredId !== null}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -213,7 +158,7 @@ export function TestLlmPanel() {
 
           {/* Quick preset model tags */}
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted">
+            <span className="font-mono text-[11px] uppercase tracking-[1.2px] text-muted">
               Presets:
             </span>
             {PRESET_MODELS.map((m) => (
@@ -221,7 +166,7 @@ export function TestLlmPanel() {
                 key={m}
                 type="button"
                 onClick={() => setModel(m)}
-                className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-0.5 font-mono text-[11px] text-muted transition-colors hover:border-white/30 hover:text-white"
+                className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-0.5 font-mono text-[12px] text-muted transition-colors hover:border-white/30 hover:text-white"
               >
                 {m}
               </button>
@@ -233,8 +178,7 @@ export function TestLlmPanel() {
               <Input
                 value={baseURL}
                 onChange={(e) => setBaseURL(e.target.value)}
-                placeholder="http://10.191.80.76:8084/v1"
-                disabled={selectedCredId !== null}
+                placeholder="http://localhost:8080/v1"
                 className="font-mono text-xs"
               />
             </FieldGroup>
@@ -250,29 +194,16 @@ export function TestLlmPanel() {
             </FieldGroup>
           </div>
 
-          {/* API Key —— 凭证模式下隐藏，后端从存储取 */}
-          {!selectedCredId && (
-            <FieldGroup label="API Key">
-              <Input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-..."
-                required
-                className="font-mono text-xs"
-              />
-            </FieldGroup>
-          )}
-
-          {/* 凭证模式提示 */}
-          {selectedCredId && (
-            <div className="rounded-sm border border-emerald-500/30 bg-emerald-500/[0.06] px-4 py-3">
-              <p className="font-mono text-[11px] text-emerald-300">
-                ✓ 使用已存凭证「{selectedCredId}」测试 — API Key
-                由后端从加密存储读取，无需手动输入。
-              </p>
-            </div>
-          )}
+          <FieldGroup label="API Key">
+            <Input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="sk-..."
+              required
+              className="font-mono text-xs"
+            />
+          </FieldGroup>
 
           <FieldGroup label="Prompt">
             <Textarea
@@ -283,12 +214,12 @@ export function TestLlmPanel() {
           </FieldGroup>
 
           <div className="flex items-center gap-4 pt-2">
-            <Button type="submit" disabled={isPending} variant="default">
-              {isPending && <Spinner className="mr-1" />}
-              {selectedCredId ? '用凭证测试' : '测试连接'}
+            <Button type="submit" disabled={testMutation.isPending} variant="default">
+              {testMutation.isPending && <Spinner className="mr-1" />}
+              测试连接
             </Button>
             {error && (
-              <span className="font-mono text-[11px] uppercase tracking-[1.2px] text-red-400">
+              <span className="font-mono text-[12px] uppercase tracking-[1.2px] text-red-400">
                 {error}
               </span>
             )}
@@ -305,7 +236,7 @@ export function TestLlmPanel() {
                 <span className="absolute inset-6 rounded-full border border-white/[0.04]" />
                 <span className="h-2 w-2 rounded-full bg-[var(--color-border-strong)]" />
               </div>
-              <p className="mt-5 font-mono text-[11px] uppercase tracking-[1.4px] text-muted">
+              <p className="mt-5 font-mono text-[12px] uppercase tracking-[1.4px] text-muted">
                 Awaiting test
               </p>
               <p className="mt-1.5 text-xs text-muted">输入 Key / URL 后点击「测试连接」</p>
@@ -315,7 +246,7 @@ export function TestLlmPanel() {
           {testMutation.isPending && (
             <div className="flex h-full min-h-[400px] flex-col items-center justify-center">
               <Spinner className="mb-4" />
-              <p className="font-mono text-[11px] uppercase tracking-[1.4px] text-muted">
+              <p className="font-mono text-[12px] uppercase tracking-[1.4px] text-muted">
                 Calling model…
               </p>
             </div>
@@ -342,7 +273,7 @@ export function TestLlmPanel() {
                 )}
                 <div className="min-w-0 flex-1">
                   <p
-                    className={`font-mono text-[12px] uppercase tracking-[1.4px] ${
+                    className={`font-mono text-[13px] uppercase tracking-[1.4px] ${
                       result.ok ? 'text-emerald-400' : 'text-red-400'
                     }`}
                   >

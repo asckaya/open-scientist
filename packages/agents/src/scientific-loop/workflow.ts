@@ -1,0 +1,103 @@
+import { getProjectDir, type AgentRuntimeConfig, type ModelArg } from '@open-scientist/config'
+import { persistScientificRecords } from '@open-scientist/storage'
+import { type PhenomenonInput, type ScientificLoopResult } from '@open-scientist/schema'
+import type { EmitChunk } from '../shared/stream.ts'
+import {
+  createProjectScientificRuntime,
+  type ScientificGraphRuntime,
+} from '../orchestration/langgraph-runtime.ts'
+import type { ScientificHumanChannel } from './human-channel.ts'
+import { createDefaultScientificDependencies, parsePhenomenon } from './default-services.ts'
+import { runScientificLoopGraph } from './scientific-graph.ts'
+import type { ScientificGraphDependencies } from './services.ts'
+
+const DEFAULT_MAX_ROUNDS = 3
+
+export interface ScientificLoopWorkflowInput {
+  /** @deprecated The scientific loop is driven by phenomenon, not a seed. */
+  seed?: string
+  projectId: string
+  runId: string
+  modelConfig: ModelArg
+  phenomenon?: PhenomenonInput
+  maxRounds?: number
+  localGrounded?: boolean
+  agentConfigs?: Record<string, AgentRuntimeConfig>
+  emitChunk?: EmitChunk
+  abortSignal?: AbortSignal
+  /** Injectable services for tests and registered application adapters. */
+  graphDependencies?: ScientificGraphDependencies
+  /** Injectable checkpoint runtime for API resume and deterministic tests. */
+  runtime?: ScientificGraphRuntime
+  /** Continue this run from the latest LangGraph checkpoint. */
+  resume?: boolean
+  /**
+   * Optional human-in-the-loop channel (pause / advisory steering / optional
+   * approval gate). Omitted by default: the loop then runs fully automatic
+   * and no human participation is required to reach closure.
+   */
+  humanChannel?: ScientificHumanChannel
+}
+
+/**
+ * The only production entrypoint for the scientific loop.
+ *
+ * The old hand-written round loop has been removed. LangGraph owns the
+ * run-scoped State and checkpoint; default agents receive a projected Context
+ * and do not own cross-task or cross-session memory.
+ */
+export async function scientificLoopWorkflow(
+  input: ScientificLoopWorkflowInput,
+): Promise<ScientificLoopResult> {
+  const phenomenon = input.phenomenon ? parsePhenomenon(input.phenomenon) : undefined
+  const runtime = input.runtime ?? createProjectScientificRuntime(input.projectId)
+  const dependencies =
+    input.graphDependencies ??
+    createDefaultScientificDependencies({
+      projectId: input.projectId,
+      runId: input.runId,
+      modelConfig: input.modelConfig,
+      agentConfigs: input.agentConfigs,
+      emitChunk: input.emitChunk,
+      abortSignal: input.abortSignal,
+      localGrounded: input.localGrounded,
+    })
+
+  try {
+    const result = await runScientificLoopGraph(
+      {
+        projectId: input.projectId,
+        runId: input.runId,
+        ...(phenomenon ? { phenomenon } : {}),
+        maxRounds: input.maxRounds ?? DEFAULT_MAX_ROUNDS,
+        emitChunk: input.emitChunk,
+        abortSignal: input.abortSignal,
+        runtime,
+        resume: input.resume,
+        ...(input.humanChannel ? { humanChannel: input.humanChannel } : {}),
+      },
+      dependencies,
+    )
+    await persistScientificRecords(input.projectId, {
+      projectId: input.projectId,
+      runId: input.runId,
+      hypotheses: result.hypotheses,
+      evidence: result.evidence,
+      corrections: result.corrections,
+      validationTasks: result.validationTasks,
+    })
+    input.emitChunk?.({
+      type: 'custom',
+      kind: 'scientific.loop-complete',
+      result,
+    } as never)
+    return result
+  } finally {
+    if (!input.runtime) runtime.close()
+  }
+}
+
+/** Keeps the project directory importable for integrations that use this module. */
+export function scientificProjectDir(projectId: string): string {
+  return getProjectDir(projectId)
+}

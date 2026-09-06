@@ -8,7 +8,7 @@
  * 当前已知工具名（从 packages/tools/src/index.ts 导出）：
  *   - bash-tool（Explore）
  *   - helix-query（Librarian）
- *   - fits-align（Looker）
+ *   - fits-align（Explorer·观测质控）
  *   - mhd-config（Prometheus）
  *   - load-skill（Skills）
  *   - 以及 agent 内联定义的工具（librarian-generate / explore-eval / oracle-critique 等）
@@ -19,7 +19,14 @@
 'use client'
 
 import { makeAssistantToolUI, type ToolCallMessagePartProps } from '@assistant-ui/react'
+import { scientificAgentIdentity } from '@open-scientist/schema'
 import { FileSearch, FlaskConical, Hammer, Search, Terminal, Wrench } from 'lucide-react'
+
+/** Same "Codename·中文职责名" badge format the backend traces emit. */
+function agentBadge(key: string): string {
+  const identity = scientificAgentIdentity(key)
+  return identity ? `${identity.codename}·${identity.displayName}` : key
+}
 
 /** 通用工具渲染 props（简化版，只取需要的字段） */
 type ToolProps = ToolCallMessagePartProps<Record<string, unknown>, unknown>
@@ -45,12 +52,12 @@ function ToolShell({
         <span className="flex h-6 w-6 items-center justify-center rounded-sm bg-[var(--color-surface)]">
           {icon}
         </span>
-        <span className="font-mono text-[11px] uppercase tracking-[1.2px] text-body">{name}</span>
+        <span className="font-mono text-[12px] uppercase tracking-[1.2px] text-body">{name}</span>
         {badge && (
-          <span className="font-mono text-[10px] uppercase tracking-[1px] text-muted">{badge}</span>
+          <span className="font-mono text-[11px] uppercase tracking-[1px] text-muted">{badge}</span>
         )}
         {isRunning && (
-          <span className="ml-auto font-mono text-[10px] uppercase tracking-[1px] text-[var(--color-sunset)]">
+          <span className="ml-auto font-mono text-[11px] uppercase tracking-[1px] text-[var(--color-sunset)]">
             running…
           </span>
         )}
@@ -65,10 +72,10 @@ function JsonPreview({ label, data }: { label: string; data: unknown }) {
   if (data == null) return null
   return (
     <details className="group">
-      <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[1px] text-muted transition-colors hover:text-body">
+      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[1px] text-muted transition-colors hover:text-body">
         {label}
       </summary>
-      <pre className="mt-1.5 max-h-40 overflow-auto rounded-sm bg-[var(--color-surface)] p-2 text-[11px] leading-relaxed text-muted">
+      <pre className="mt-1.5 max-h-40 overflow-auto rounded-sm bg-[var(--color-surface)] p-2 text-[12px] leading-relaxed text-muted">
         {JSON.stringify(data, null, 2)}
       </pre>
     </details>
@@ -82,11 +89,11 @@ export const BashToolUI = makeAssistantToolUI({
     <ToolShell
       icon={<Terminal className="h-3.5 w-3.5 text-[var(--color-explore)]" />}
       name="bash"
-      badge="Explore"
+      badge={agentBadge('explore')}
       status={status.type}
     >
       {args?.command && (
-        <pre className="rounded-sm bg-[var(--color-surface)] p-2 text-[11px] text-emerald-300">
+        <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-sm bg-[var(--color-surface)] p-2 text-[12px] text-emerald-300">
           ${' '}
           {typeof args.command === 'string'
             ? args.command
@@ -105,11 +112,11 @@ export const HelixQueryToolUI = makeAssistantToolUI({
     <ToolShell
       icon={<Search className="h-3.5 w-3.5 text-[var(--color-librarian)]" />}
       name="helix-query"
-      badge="Librarian"
+      badge={agentBadge('librarian')}
       status={status.type}
     >
       {args?.query && (
-        <p className="font-mono text-[11px] text-muted">
+        <p className="break-all font-mono text-[12px] text-muted">
           query:{' '}
           {typeof args.query === 'string' ? args.query : JSON.stringify(args.query).slice(0, 120)}
         </p>
@@ -119,14 +126,14 @@ export const HelixQueryToolUI = makeAssistantToolUI({
   ),
 })
 
-// ── fits-align (Looker) ──────────────────────────────────────────────────
+// ── fits-align (Explorer·观测质控) ──────────────────────────────────────────────────
 export const FitsAlignToolUI = makeAssistantToolUI({
   toolName: 'fits-align',
   render: ({ args, result, status }: ToolProps) => (
     <ToolShell
       icon={<FileSearch className="h-3.5 w-3.5 text-[var(--color-looker)]" />}
       name="fits-align"
-      badge="Looker"
+      badge={agentBadge('looker')}
       status={status.type}
     >
       <JsonPreview label="input" data={args} />
@@ -142,7 +149,7 @@ export const MhdConfigToolUI = makeAssistantToolUI({
     <ToolShell
       icon={<FlaskConical className="h-3.5 w-3.5 text-[var(--color-prometheus)]" />}
       name="mhd-config"
-      badge="Prometheus"
+      badge={agentBadge('prometheus')}
       status={status.type}
     >
       <JsonPreview label="config" data={result} />
@@ -160,7 +167,7 @@ export const LoadSkillToolUI = makeAssistantToolUI({
       status={status.type}
     >
       {args?.skill && (
-        <p className="font-mono text-[11px] text-muted">
+        <p className="break-all font-mono text-[12px] text-muted">
           skill: {typeof args.skill === 'string' ? args.skill : JSON.stringify(args.skill)}
         </p>
       )}
@@ -178,7 +185,7 @@ export const GenericToolUI = makeAssistantToolUI({
       name={toolName ?? 'tool'}
       status={status.type}
     >
-      {isError && <p className="font-mono text-[11px] text-red-400">tool execution error</p>}
+      {isError && <p className="font-mono text-[12px] text-red-400">工具执行失败</p>}
       <JsonPreview label="input" data={args} />
       <JsonPreview label="output" data={result} />
     </ToolShell>

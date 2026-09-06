@@ -47,9 +47,28 @@ export async function respondWithRunStream(
 export function attachRunCompletion(projectName: string, run: Run): void {
   void run.result.then(
     (output) => {
+      // Cancellation resolves without a workflow result. The stop endpoint is
+      // the single owner of the persisted `stopped` status, so do not race it
+      // with a late `completed` update.
+      if (!output) return
+      if ('terminationReason' in output) {
+        void completeRun(
+          projectName,
+          run.runId,
+          output.status === 'failed' ? 'failed' : 'completed',
+          {
+            currentRound: output.totalRounds,
+            scientificStatus: output.scientificStatus ?? 'inconclusive',
+            terminationReason: output.terminationReason,
+            result: output,
+          },
+        )
+        return
+      }
       void completeRun(projectName, run.runId, 'completed', {
-        bestF1: output?.bestF1,
-        currentRound: output?.totalRounds,
+        bestF1: output.bestF1,
+        currentRound: output.totalRounds,
+        result: output,
       })
     },
     () => {

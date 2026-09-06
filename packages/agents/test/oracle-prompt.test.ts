@@ -1,11 +1,15 @@
 import type { EvalResult, Hypothesis } from '@open-scientist/schema'
 import { describe, expect, it } from 'vite-plus/test'
-import { buildEvalSummaryBlock, buildHypothesesBlock } from '../src/oracle/workflow.ts'
+import { buildEvalSummaryBlock, buildHypothesesBlock } from '../src/legacy/oracle/workflow.ts'
 
 function makeHypothesis(overrides: Partial<Hypothesis> = {}): Hypothesis {
   return {
     id: 'h1',
     statement: 'AC wave heating dissipates Alfvén waves in the corona',
+    mechanism: 'alfven-wave-dissipation',
+    predictions: ['coherent propagating EUV disturbances'],
+    falsificationConditions: ['no propagating signal in a quality-controlled time series'],
+    sourceIds: ['paper:alfven-1'],
     pythonCode: 'def filter(snapshot):\n    return snapshot["temperature"] > 1e6',
     parentId: null,
     round: 1,
@@ -24,6 +28,7 @@ function makeEval(overrides: Partial<EvalResult> = {}): EvalResult {
     falsePositives: 5,
     falseNegatives: 8,
     counterexamples: [],
+    candidateSnapshots: [],
     logs: '',
     executionMs: 1234,
     ...overrides,
@@ -44,6 +49,16 @@ describe('buildHypothesesBlock', () => {
     expect(block).toContain('AC wave heating dissipates Alfvén waves in the corona')
     expect(block).toContain('def filter(snapshot):')
     expect(block).toContain('```python')
+  })
+
+  it('renders scientific hypothesis context', () => {
+    const block = buildHypothesesBlock([makeHypothesis()], [])
+    expect(block).toContain('mechanism: alfven-wave-dissipation')
+    expect(block).toContain('predictions: coherent propagating EUV disturbances')
+    expect(block).toContain(
+      'falsificationConditions: no propagating signal in a quality-controlled time series',
+    )
+    expect(block).toContain('sourceIds: paper:alfven-1')
   })
 
   it('renders counterexamples from the matching EvalResult', () => {

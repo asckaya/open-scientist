@@ -1,0 +1,60 @@
+import { describe, expect, it } from 'vite-plus/test'
+import {
+  SCIENTIFIC_AGENTS,
+  SCIENTIFIC_AGENT_DISPLAY_NAMES,
+  scientificAgentIdentity,
+  type ScientificAgentRoleKey,
+} from '../src/scientific-agent-names.ts'
+
+describe('scientific agent identities', () => {
+  it('covers exactly the six stable role keys', () => {
+    const keys = SCIENTIFIC_AGENTS.map((agent) => agent.key).sort()
+    expect(keys).toEqual(['explore', 'librarian', 'looker', 'oracle', 'prometheus', 'sisyphus'])
+  })
+
+  it('keeps display names and English names unique, codenames stage-aligned', () => {
+    const codenames = SCIENTIFIC_AGENTS.map((agent) => agent.codename)
+    const displayNames = SCIENTIFIC_AGENTS.map((agent) => agent.displayName)
+    const englishNames = SCIENTIFIC_AGENTS.map((agent) => agent.englishName)
+    // Codenames intentionally repeat the five document-facing stage names
+    // (Explorer covers 观测质控/物理诊断/反证审计 sub-agents), so uniqueness
+    // is asserted against the stage vocabulary, not across agents.
+    const stageNames = new Set(['Librarian', 'Surveyor', 'Explorer', 'Oracle', 'Prometheus'])
+    for (const codename of codenames) expect(stageNames.has(codename)).toBe(true)
+    expect(new Set(displayNames).size).toBe(displayNames.length)
+    expect(new Set(englishNames).size).toBe(englishNames.length)
+  })
+
+  it('assigns every agent a valid loop stage and a one-line responsibility', () => {
+    for (const agent of SCIENTIFIC_AGENTS) {
+      expect([
+        'librarian',
+        'self-correction-i',
+        'surveyor',
+        'explorer',
+        'self-correction-ii',
+        'oracle',
+        'prometheus',
+      ]).toContain(agent.stage)
+      expect(agent.responsibility.length).toBeGreaterThan(8)
+      expect(agent.codename.length).toBeGreaterThan(2)
+    }
+  })
+
+  it('keeps the legacy display-name map aligned with the identity table', () => {
+    for (const agent of SCIENTIFIC_AGENTS) {
+      expect(SCIENTIFIC_AGENT_DISPLAY_NAMES[agent.key as ScientificAgentRoleKey]).toBe(
+        agent.displayName,
+      )
+    }
+    expect(Object.keys(SCIENTIFIC_AGENT_DISPLAY_NAMES)).toHaveLength(SCIENTIFIC_AGENTS.length)
+  })
+
+  it('resolves identities by key and returns undefined for unknown or empty keys', () => {
+    expect(scientificAgentIdentity('oracle')?.codename).toBe('Explorer')
+    expect(scientificAgentIdentity('LIBRARIAN')).toBeUndefined()
+    expect(scientificAgentIdentity('')).toBeUndefined()
+    expect(scientificAgentIdentity(null)).toBeUndefined()
+    expect(scientificAgentIdentity(undefined)).toBeUndefined()
+  })
+})
